@@ -26,7 +26,7 @@ public class MainActivity extends Activity {
   private final Handler handler=new Handler(Looper.getMainLooper());
   private final ArrayList<Uri> playlist=new ArrayList<>();
   private FrameLayout root, content, videoLayer;
-  private VideoView video;
+  private FitVideoView video;
   private WebView web;
   private TextView prompt, clock, date, weather, forecast, empty;
   private int index=0, timeout=120000, lastPosition=0;
@@ -44,18 +44,19 @@ public class MainActivity extends Activity {
     getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     immersive();timeout=getPreferences(0).getInt("timeout",120000);
     root=new FrameLayout(this);root.setBackgroundColor(Color.BLACK);setContentView(root);
-    LinearLayout page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);root.addView(page,new FrameLayout.LayoutParams(-1,-1));
-    LinearLayout top=new LinearLayout(this);top.setGravity(Gravity.CENTER_VERTICAL);top.setPadding(dp(20),dp(8),dp(20),dp(8));top.setBackgroundColor(0xFF142A20);page.addView(top,new LinearLayout.LayoutParams(-1,dp(86)));
+    LinearLayout top=new LinearLayout(this);top.setGravity(Gravity.CENTER_VERTICAL);top.setPadding(dp(20),dp(8),dp(20),dp(8));top.setBackgroundColor(0x99142A20);
     LinearLayout timeBox=new LinearLayout(this);timeBox.setOrientation(LinearLayout.VERTICAL);top.addView(timeBox,new LinearLayout.LayoutParams(0,-2,1));
     clock=label("--:--",28,true);timeBox.addView(clock);date=label("",12,false);date.setTextColor(0xFFB8D2C1);timeBox.addView(date);
     LinearLayout weatherBox=new LinearLayout(this);weatherBox.setGravity(Gravity.RIGHT);weatherBox.setOrientation(LinearLayout.VERTICAL);top.addView(weatherBox,new LinearLayout.LayoutParams(0,-2,2));
     weather=label(weatherLine,17,true);weather.setGravity(Gravity.RIGHT);weather.setMaxLines(1);weatherBox.addView(weather);
     forecast=label("",13,false);forecast.setTextColor(0xFFBED7C7);forecast.setGravity(Gravity.RIGHT);forecast.setMaxLines(2);weatherBox.addView(forecast);
     top.setOnLongClickListener(v->{settings();return true;});
-    content=new FrameLayout(this);page.addView(content,new LinearLayout.LayoutParams(-1,0,1));
+    content=new FrameLayout(this);root.addView(content,new FrameLayout.LayoutParams(-1,-1));
+    FrameLayout.LayoutParams topParams=new FrameLayout.LayoutParams(-1,dp(86),Gravity.TOP);
+    root.addView(top,topParams);
     web=new WebView(this);web.getSettings().setJavaScriptEnabled(true);web.getSettings().setDomStorageEnabled(true);web.getSettings().setMediaPlaybackRequiresUserGesture(false);web.getSettings().setAllowFileAccess(false);web.setWebViewClient(new WebViewClient());web.setWebChromeClient(new WebChromeClient());web.setVisibility(View.GONE);content.addView(web,new FrameLayout.LayoutParams(-1,-1));
     videoLayer=new FrameLayout(this);videoLayer.setBackgroundColor(0xFF101A14);content.addView(videoLayer,new FrameLayout.LayoutParams(-1,-1));
-    video=new VideoView(this);videoLayer.addView(video,new FrameLayout.LayoutParams(-1,-1));
+    video=new FitVideoView(this);videoLayer.addView(video,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
     empty=label("",19,false);empty.setGravity(Gravity.CENTER);empty.setPadding(dp(20),dp(20),dp(20),dp(20));videoLayer.addView(empty,new FrameLayout.LayoutParams(-1,-1));
     prompt=label("☝  ТОРКНІТЬСЯ ЕКРАНА, ЩОБ ДІЗНАТИСЯ БІЛЬШЕ",19,true);prompt.setGravity(Gravity.CENTER);prompt.setPadding(dp(20),dp(13),dp(20),dp(13));prompt.setBackground(bg(0xCC0A2017,14));
     FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);pp.setMargins(dp(15),0,dp(15),dp(26));videoLayer.addView(prompt,pp);
@@ -67,10 +68,27 @@ public class MainActivity extends Activity {
     if(playlist.isEmpty())showEmpty();else playCurrent();
     handler.post(tick);handler.post(refresh);
   }
+  // Вписує кадр цілком, зберігаючи співвідношення сторін; центрування задає FrameLayout.
+  private static class FitVideoView extends VideoView {
+    private int videoWidth=0, videoHeight=0;
+    FitVideoView(Context context){super(context);}
+    void setVideoDimensions(int width,int height){videoWidth=width;videoHeight=height;requestLayout();}
+    @Override protected void onMeasure(int widthMeasureSpec,int heightMeasureSpec){
+      int availableWidth=View.MeasureSpec.getSize(widthMeasureSpec);
+      int availableHeight=View.MeasureSpec.getSize(heightMeasureSpec);
+      if(videoWidth<=0||videoHeight<=0||availableWidth<=0||availableHeight<=0){
+        setMeasuredDimension(availableWidth,availableHeight);return;
+      }
+      double scale=Math.min((double)availableWidth/videoWidth,(double)availableHeight/videoHeight);
+      int width=Math.max(1,(int)Math.round(videoWidth*scale));
+      int height=Math.max(1,(int)Math.round(videoHeight*scale));
+      setMeasuredDimension(width,height);
+    }
+  }
   private void immersive(){getWindow().getDecorView().setSystemUiVisibility(5894|1024|512|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);}
   private void updateClock(){Date now=new Date();clock.setText(new SimpleDateFormat("HH:mm",new Locale("uk","UA")).format(now));date.setText(new SimpleDateFormat("EEEE, d MMMM",new Locale("uk","UA")).format(now));}
   private void showEmpty(){video.setVisibility(View.GONE);empty.setVisibility(View.VISIBLE);empty.setText("Відео ще не додано\n\nУтримуйте верхню панель, щоб вибрати папку Movies/ForestKiosk");}
-  private void playCurrent(){if(siteOpen)return;if(playlist.isEmpty()){showEmpty();return;}video.setVisibility(View.VISIBLE);empty.setVisibility(View.GONE);Uri uri=playlist.get(index%playlist.size());video.setVideoURI(uri);video.setOnPreparedListener(mp->{if(!siteOpen){mp.setVolume(getPreferences(0).getBoolean("sound",false)?1f:0f,getPreferences(0).getBoolean("sound",false)?1f:0f);video.start();}});}
+  private void playCurrent(){if(siteOpen)return;if(playlist.isEmpty()){showEmpty();return;}video.setVisibility(View.VISIBLE);empty.setVisibility(View.GONE);Uri uri=playlist.get(index%playlist.size());video.setVideoDimensions(0,0);video.setVideoURI(uri);video.setOnPreparedListener(mp->{video.setVideoDimensions(mp.getVideoWidth(),mp.getVideoHeight());if(!siteOpen){mp.setVolume(getPreferences(0).getBoolean("sound",false)?1f:0f,getPreferences(0).getBoolean("sound",false)?1f:0f);video.start();}});}
   private void playNext(){if(playlist.isEmpty()||siteOpen)return;index=(index+1)%playlist.size();lastPosition=0;playCurrent();}
   private void showSite(){if(siteOpen)return;siteOpen=true;lastPosition=video.getCurrentPosition();if(video.isPlaying())video.pause();videoLayer.setVisibility(View.GONE);web.setVisibility(View.VISIBLE);if(web.getUrl()==null||"about:blank".equals(web.getUrl()))web.loadUrl(SITE);lastTouch=System.currentTimeMillis();scheduleIdle();}
   private void showVideo(){if(!siteOpen)return;siteOpen=false;handler.removeCallbacks(idle);web.onPause();web.setVisibility(View.GONE);videoLayer.setVisibility(View.VISIBLE);web.loadUrl("about:blank");web.onResume();if(playlist.isEmpty())showEmpty();else if(lastPosition>0){video.seekTo(lastPosition);video.start();}else playCurrent();}
