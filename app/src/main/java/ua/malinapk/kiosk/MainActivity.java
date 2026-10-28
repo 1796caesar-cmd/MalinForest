@@ -30,7 +30,7 @@ public class MainActivity extends Activity {
   private static final String[] NEWS_URLS={"https://www.openforest.org.ua/feed/", "https://www.openforest.org.ua/section/news/feed/"};
   private static final String FOREST_HOME="https://www.openforest.org.ua/";
   private static final String FOREST_NEWS="https://www.openforest.org.ua/section/news/";
-  private static final int NEWS_CACHE_VERSION=4;
+  private static final int NEWS_CACHE_VERSION=7;
   private static final String HOLIDAY_URL="https://daytoday.ua/sogodni/";
   private static final int HOLIDAY_CACHE_VERSION=2;
   private static final int PICK_FOLDER=44;
@@ -440,27 +440,66 @@ public class MainActivity extends Activity {
   }
   // Оцінки, політичні коментарі й клікбейт не потрапляють до інформаційної стрічки.
   // Заголовки цього сайту часто короткі: не застосовуємо старий фільтр ТСН.
+  // На сторінці «Новини» не вимагаємо ключового слова в кожному заголовку:
+  // інакше відкидаються корисні повідомлення про лісову галузь.
+  // Без тематичних, мовних і стилістичних фільтрів заголовків.
+  // Відкидаємо лише порожній текст та надто довгі технічні рядки.
   private boolean suitableForestNews(String text){
-    String s=text.toLowerCase(new Locale("uk","UA")).trim();
-    if(s.length()<24||s.length()>235||clickbait(s))return false;
-    if(s.matches(".*[ыэъёЫЭЪЁ].*"))return false;
-    String[] reject={"ответы dm", "ответы дм", "хто винен", "скандал", "сенсац",
-      "троянський кінь", "чи врятує", "що відомо", "що чекати", "гороскоп"};
-    for(String word:reject)if(s.contains(word))return false;
-    String[] topics={"ліс", "дерев", "деревооброб", "пиломатеріал", "заготівл",
-      "рубк", "пожеж", "довкіл", "природ", "еколог", "eudr", "аукціон",
-      "меблев", "земл", "саджанц", "гектар", "дбр", "дп «ліси україни»",
-      "лісов", "пелет", "деревн", "міністр", "громад", "фру", "мінaгро"};
-    for(String word:topics)if(s.contains(word))return true;
-    return false;
+    if(text==null)return false;
+    String title=text.replaceAll("\\s+"," ").trim();
+    if(title.isEmpty()||title.length()>350)return false;
+    return isUkrainianTitle(title);
   }
+  // Без сервісу перекладу: не допускаємо російськомовні та невизначені заголовки.
+  // Це консервативний евристичний фільтр мови, а не перекладач.
+  private boolean isUkrainianTitle(String title){
+    String s=" "+title.toLowerCase(new Locale("uk","UA"))
+      .replaceAll("[^\\p{L}]+"," ").trim()+" ";
+    if(s.matches(".*[ыэъё].*"))return false;
+    String[] russian={" что "," это "," для этого "," который "," которая ",
+      " которые "," также "," сегодня "," сейчас "," после "," будет ",
+      " были "," года "," леса "," лесов "," древесины "," украины ",
+      " россии "," российские "," заявил "," сообщили "," власти ",
+      " предприятие "," предприятий "," производство "," согласно ",
+      " более "," около "," между "," области "," новый "," новые ",
+      " новые "," строительство "," незаконной "," рубки "," в украине ",
+      " из за "," из "," по данным "," лесной "," лесные "," деревьев "};
+    for(String word:russian)if(s.contains(word))return false;
+    // Українські літери — позитивне підтвердження, без них мову не вгадуємо.
+    if(s.matches(".*[іїєґ].*"))return true;
+    String[] ukrainian={" та "," для "," від "," щодо "," через ",
+      " понад "," серед "," під "," над "," після "," сталося ",
+      " ухвалили "," лісів "," лісу "," лісові "," лісове ",
+      " деревини "," деревину "," громаді "," громад "," заготівлю ",
+      " України "," українськ "," області "," року "," роки ",
+      " у "," на "," в "," з "," до "," про "};
+    // Однієї спільної службової частки замало для визначення мови.
+    int distinct=0;
+    for(String word:ukrainian){
+      if(word.equals(" у ")||word.equals(" на ")||word.equals(" в ")||
+         word.equals(" з ")||word.equals(" до ")||word.equals(" про "))continue;
+      if(s.contains(word.toLowerCase(new Locale("uk","UA"))))distinct++;
+    }
+    return distinct>=2;
+  }
+  // Заголовки сторінок, а також посилання на публікації в блоках, де немає h3.
   private ArrayList<String> readForestHome(String html){
     LinkedHashSet<String> result=new LinkedHashSet<>();
-    Pattern p=Pattern.compile("(?is)<h[234]\\b[^>]*>(.*?)</h[234]>");
-    Matcher m=p.matcher(html);
-    while(m.find()&&result.size()<45){
-      String heading=plain(m.group(1)).replaceAll("\\s+"," ").trim();
-      if(suitableForestNews(heading))result.add(heading);
+    Pattern heading=Pattern.compile("(?is)<h[234]\\b[^>]*>(.*?)</h[234]>");
+    Matcher m=heading.matcher(html);
+    while(m.find()&&result.size()<30){
+      String name=plain(m.group(1)).replaceAll("\\s+"," ").trim();
+      if(suitableForestNews(name))result.add(name);
+    }
+    // WordPress-теми часто використовують заголовки-посилання без h3.
+    Pattern link=Pattern.compile("(?is)<a\\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>");
+    Matcher lm=link.matcher(html);
+    while(lm.find()&&result.size()<30){
+      String href=lm.group(1).toLowerCase(Locale.ROOT);
+      if(!href.contains("openforest.org.ua/")||href.contains("/section/")||
+         href.contains("/page/")||href.contains("/tag/")||href.contains("/author/"))continue;
+      String name=plain(lm.group(2)).replaceAll("\\s+"," ").trim();
+      if(suitableForestNews(name))result.add(name);
     }
     return new ArrayList<>(result);
   }
@@ -489,20 +528,27 @@ public class MainActivity extends Activity {
   }
   private void loadNews(){new Thread(()->{
     LinkedHashSet<String> facts=new LinkedHashSet<>();
-    // Першим читаємо сторінку новин: вона містить більше статей, ніж головна.
-    String[] pages={FOREST_NEWS,FOREST_HOME,FOREST_NEWS+"page/2/"};
-    for(String page:pages){
-      try{for(String item:readForestHome(fetch(page))){
-        facts.add(item);if(facts.size()>=30)break;
-      }}catch(Exception ignored){}
-      if(facts.size()>=30)break;
+    // Кілька сторінок архіву, а не лише головна і перші дві сторінки.
+    // Зупиняємось на 20 різних новинах.
+    for(int page=1;page<=8&&facts.size()<20;page++){
+      String url=page==1?FOREST_NEWS:FOREST_NEWS+"page/"+page+"/";
+      try{
+        for(String item:readForestHome(fetch(url))){
+          facts.add(item);
+          if(facts.size()>=20)break;
+        }
+      }catch(Exception ignored){}
     }
-    // RSS — додаткове джерело, якщо сайт його підтримує.
+    if(facts.size()<20){
+      try{for(String item:readForestHome(fetch(FOREST_HOME))){
+        facts.add(item);if(facts.size()>=20)break;
+      }}catch(Exception ignored){}
+    }
     if(facts.size()<20)for(String source:NEWS_URLS){
       try{for(String item:readForestFeed(fetch(source))){
-        facts.add(item);if(facts.size()>=30)break;
+        facts.add(item);if(facts.size()>=20)break;
       }}catch(Exception ignored){}
-      if(facts.size()>=30)break;
+      if(facts.size()>=20)break;
     }
     if(!facts.isEmpty()){
       String joined=TextUtils.join("     ●     ",facts)+"     ●     ";
