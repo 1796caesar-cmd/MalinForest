@@ -29,6 +29,7 @@ public class MainActivity extends Activity {
   private static final String WEATHER_URL="https://api.open-meteo.com/v1/forecast?latitude=50.77&longitude=29.24&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code&timezone=Europe%2FKyiv&forecast_days=2";
   private static final String[] NEWS_URLS={"https://tsn.ua/rss/full.rss", "https://www.ukrinform.ua/rss/block-lastnews"};
   private static final String HOLIDAY_URL="https://daytoday.ua/sogodni/";
+  private static final int HOLIDAY_CACHE_VERSION=2;
   private static final int PICK_FOLDER=44;
   private final Handler handler=new Handler(Looper.getMainLooper());
   private final ArrayList<Uri> playlist=new ArrayList<>();
@@ -156,7 +157,7 @@ public class MainActivity extends Activity {
     holidayBox.addView(holidaySwitcher,new LinearLayout.LayoutParams(-1,dp(44)));
     holidaySwitcher.setCurrentText("Завантажуємо свята…");
     holidayDate=getPreferences(0).getString("holiday_date","");
-    if(todayKey().equals(holidayDate)){
+    if(todayKey().equals(holidayDate) && getPreferences(0).getInt("holiday_cache_version",0)==HOLIDAY_CACHE_VERSION){
       try{
         JSONArray saved=new JSONArray(getPreferences(0).getString("holiday_cache","[]"));
         for(int i=0;i<saved.length();i++)holidays.add(saved.getString(i));
@@ -469,34 +470,47 @@ public class MainActivity extends Activity {
   private void loadHolidays(){new Thread(()->{
     try{
       String html=fetch(HOLIDAY_URL);
-      // DAY TODAY is an HTML page, not a documented API. Extract holiday headings/links.
-      // If the site's layout changes, keep the previously saved data for this date.
+      // Read only today's dated holiday cards, not navigation or unrelated links.
+      // The page also contains other dates, birthdays and general article links.
       LinkedHashSet<String> result=new LinkedHashSet<>();
-      Pattern headings=Pattern.compile("(?is)<(?:h2|h3|h4|a)\\b[^>]*>(.*?)</(?:h2|h3|h4|a)>");
-      Matcher m=headings.matcher(html);
-      while(m.find()&&result.size()<24){
-        String s=plain(m.group(1));
-        if(s.length()>=12&&s.length()<=105&&!excludeHoliday(s)&&
-           !s.matches("(?iu).*(іменини|іменинник|хто народився|народилися сьогодні|дні народження|день народження відомих|народження знаменитостей|імена сьогодні).*")&&
-           !s.toLowerCase(Locale.ROOT).contains("іменини")&&
-           !s.toLowerCase(Locale.ROOT).contains("хто народився")&&
-          (s.matches("(?iu)^(?:Всесвітній|Міжнародний|Всеукраїнський|Національний|Європейський|День|Річниця|Свято|Доба|Тиждень)\\b.*")||
-           s.matches("(?iu)^.*\\bдень\\b.*"))&&
-           !s.toLowerCase(Locale.ROOT).contains("календар")&&
-           !s.toLowerCase(Locale.ROOT).contains("читати"))result.add(s);
+      String key=todayKey();
+      Calendar kyiv=Calendar.getInstance(TimeZone.getTimeZone("Europe/Kyiv"));
+      String[] monthNames={"січня","лютого","березня","квітня","травня","червня",
+        "липня","серпня","вересня","жовтня","листопада","грудня"};
+      String expectedDate=kyiv.get(Calendar.DAY_OF_MONTH)+" "+monthNames[kyiv.get(Calendar.MONTH)];
+      int endSection=html.toLowerCase(Locale.ROOT).indexOf("зараз також тривають");
+      if(endSection<0)throw new IOException("Holiday section not found");
+      String section=html.substring(0,endSection);
+      Pattern headings=Pattern.compile("(?is)<h3\\b[^>]*>(.*?)</h3>");
+      Matcher m=headings.matcher(section);
+      ArrayList<String> names=new ArrayList<>();
+      ArrayList<Integer> positions=new ArrayList<>();
+      while(m.find()){
+        names.add(plain(m.group(1)));
+        positions.add(m.end());
+      }
+      for(int i=0;i<names.size()&&result.size()<24;i++){
+        String s=names.get(i);
+        if(s.length()<8||s.length()>105||excludeHoliday(s))continue;
+        int from=positions.get(i);
+        int to=i+1<positions.size()?section.lastIndexOf("<h3",positions.get(i+1)):section.length();
+        if(to<from)to=section.length();
+        String details=plain(section.substring(from,to)).toLowerCase(new Locale("uk","UA"));
+        // Require an explicit date inside the card itself.
+        if(details.contains(expectedDate))result.add(s);
       }
       if(!result.isEmpty()){
         JSONArray arr=new JSONArray();for(String s:result)arr.put(s);
-        String key=todayKey();getPreferences(0).edit().putString("holiday_date",key)
+        getPreferences(0).edit().putInt("holiday_cache_version",HOLIDAY_CACHE_VERSION).putString("holiday_date",key)
           .putString("holiday_cache",arr.toString()).apply();
         runOnUiThread(()->{
           if(!todayKey().equals(key))return;
           holidays.clear();holidays.addAll(result);holidayIndex=0;holidayDate=key;
           holidaySwitcher.setCurrentText(holidays.get(0));
         });
-      }else if(holidays.isEmpty())runOnUiThread(()->holidaySwitcher.setCurrentText("Свята сьогодні не знайдено"));
+      }else if(holidays.isEmpty())runOnUiThread(()->holidaySwitcher.setCurrentText("Інформація про свята недоступна"));
     }catch(Exception ignored){
-      if(holidays.isEmpty())runOnUiThread(()->holidaySwitcher.setCurrentText("Свята тимчасово недоступні"));
+      if(holidays.isEmpty())runOnUiThread(()->holidaySwitcher.setCurrentText("Інформація про свята недоступна"));
     }
   }).start();}
   private String degrees(double v){return (v>0?"+":"")+Math.round(v);}
