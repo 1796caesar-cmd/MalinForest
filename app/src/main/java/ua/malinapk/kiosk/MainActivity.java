@@ -29,7 +29,8 @@ public class MainActivity extends Activity {
   private static final String WEATHER_URL="https://api.open-meteo.com/v1/forecast?latitude=50.77&longitude=29.24&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code&timezone=Europe%2FKyiv&forecast_days=2";
   private static final String[] NEWS_URLS={"https://www.openforest.org.ua/feed/", "https://www.openforest.org.ua/section/news/feed/"};
   private static final String FOREST_HOME="https://www.openforest.org.ua/";
-  private static final int NEWS_CACHE_VERSION=3;
+  private static final String FOREST_NEWS="https://www.openforest.org.ua/section/news/";
+  private static final int NEWS_CACHE_VERSION=4;
   private static final String HOLIDAY_URL="https://daytoday.ua/sogodni/";
   private static final int HOLIDAY_CACHE_VERSION=2;
   private static final int PICK_FOLDER=44;
@@ -438,47 +439,70 @@ public class MainActivity extends Activity {
     return facts;
   }
   // Оцінки, політичні коментарі й клікбейт не потрапляють до інформаційної стрічки.
+  // Заголовки цього сайту часто короткі: не застосовуємо старий фільтр ТСН.
   private boolean suitableForestNews(String text){
-    String s=text.toLowerCase(new Locale("uk","UA"));
-    if(s.length()<27||s.length()>190||clickbait(s))return false;
-    if(s.matches(".*[ыэъёЫЭЪЁ].*"))return false; // Без машинного перекладу російськомовних заголовків.
-    String[] reject={"думка", "колонка", "інтерв'ю", "хто винен", "скандал", "сенсац",
-      "відповіді dm", "велика брехня", "троянський кінь", "чи врятує", "що відомо", "що чекати"};
+    String s=text.toLowerCase(new Locale("uk","UA")).trim();
+    if(s.length()<24||s.length()>235||clickbait(s))return false;
+    if(s.matches(".*[ыэъёЫЭЪЁ].*"))return false;
+    String[] reject={"ответы dm", "ответы дм", "хто винен", "скандал", "сенсац",
+      "троянський кінь", "чи врятує", "що відомо", "що чекати", "гороскоп"};
     for(String word:reject)if(s.contains(word))return false;
-    String[] topics={"ліс", "дерев", "лісниц", "деревооброб", "пиломатеріал", "заготівл",
-      "рубк", "пожеж", "довкіл", "природ", "еколог", "дрон", "eudr", "аукціон", "меблев"};
+    String[] topics={"ліс", "дерев", "деревооброб", "пиломатеріал", "заготівл",
+      "рубк", "пожеж", "довкіл", "природ", "еколог", "eudr", "аукціон",
+      "меблев", "земл", "саджанц", "гектар", "дбр", "дп «ліси україни»",
+      "лісов", "пелет", "деревн", "міністр", "громад", "фру", "мінaгро"};
     for(String word:topics)if(s.contains(word))return true;
     return false;
   }
-  // Запасний варіант для сайту, якщо RSS тимчасово недоступний.
   private ArrayList<String> readForestHome(String html){
-    ArrayList<String> result=new ArrayList<>();
-    Pattern p=Pattern.compile("(?is)<h3\\b[^>]*>(.*?)</h3>");
+    LinkedHashSet<String> result=new LinkedHashSet<>();
+    Pattern p=Pattern.compile("(?is)<h[234]\\b[^>]*>(.*?)</h[234]>");
     Matcher m=p.matcher(html);
-    while(m.find()&&result.size()<20){
+    while(m.find()&&result.size()<45){
       String heading=plain(m.group(1)).replaceAll("\\s+"," ").trim();
-      if(suitableForestNews(heading)&&!result.contains(heading))result.add(heading);
+      if(suitableForestNews(heading))result.add(heading);
     }
-    return result;
+    return new ArrayList<>(result);
+  }
+  // RSS: використовуємо справжній заголовок, а не правило для новин ТСН.
+  private ArrayList<String> readForestFeed(String xml) throws Exception{
+    XmlPullParser p=XmlPullParserFactory.newInstance().newPullParser();
+    p.setInput(new StringReader(xml));
+    LinkedHashSet<String> result=new LinkedHashSet<>();
+    boolean inItem=false;String title="";
+    int event=p.getEventType();
+    while(event!=XmlPullParser.END_DOCUMENT&&result.size()<40){
+      if(event==XmlPullParser.START_TAG){
+        String tag=p.getName();
+        if("item".equalsIgnoreCase(tag)||"entry".equalsIgnoreCase(tag)){
+          inItem=true;title="";
+        }else if(inItem&&"title".equalsIgnoreCase(tag))title=p.nextText();
+      }else if(event==XmlPullParser.END_TAG&&inItem&&
+          ("item".equalsIgnoreCase(p.getName())||"entry".equalsIgnoreCase(p.getName()))){
+        inItem=false;
+        String heading=plain(title).replaceAll("\\s+"," ").trim();
+        if(suitableForestNews(heading))result.add(heading);
+      }
+      event=p.next();
+    }
+    return new ArrayList<>(result);
   }
   private void loadNews(){new Thread(()->{
     LinkedHashSet<String> facts=new LinkedHashSet<>();
-    for(String source:NEWS_URLS){
-      try{
-        for(String item:readFacts(fetch(source))){
-          if(suitableForestNews(item))facts.add(item);
-          if(facts.size()>=25)break;
-        }
-      }catch(Exception ignored){}
-      if(facts.size()>=25)break;
+    // Першим читаємо сторінку новин: вона містить більше статей, ніж головна.
+    String[] pages={FOREST_NEWS,FOREST_HOME,FOREST_NEWS+"page/2/"};
+    for(String page:pages){
+      try{for(String item:readForestHome(fetch(page))){
+        facts.add(item);if(facts.size()>=30)break;
+      }}catch(Exception ignored){}
+      if(facts.size()>=30)break;
     }
-    if(facts.size()<6){
-      try{
-        for(String item:readForestHome(fetch(FOREST_HOME))){
-          facts.add(item);
-          if(facts.size()>=25)break;
-        }
-      }catch(Exception ignored){}
+    // RSS — додаткове джерело, якщо сайт його підтримує.
+    if(facts.size()<20)for(String source:NEWS_URLS){
+      try{for(String item:readForestFeed(fetch(source))){
+        facts.add(item);if(facts.size()>=30)break;
+      }}catch(Exception ignored){}
+      if(facts.size()>=30)break;
     }
     if(!facts.isEmpty()){
       String joined=TextUtils.join("     ●     ",facts)+"     ●     ";
@@ -486,11 +510,8 @@ public class MainActivity extends Activity {
         .putString("news_cache",joined).apply();
       runOnUiThread(()->{
         if(cachedNews.isEmpty()){
-          cachedNews=joined;
-          tickerViewport.post(this::startTicker);
-        }else if(!cachedNews.equals(joined)){
-          pendingNews=joined;
-        }
+          cachedNews=joined;tickerViewport.post(this::startTicker);
+        }else if(!cachedNews.equals(joined))pendingNews=joined;
       });
     }else if(cachedNews.isEmpty())runOnUiThread(()->{
       cachedNews="Лісові новини тимчасово недоступні     ●     ";
