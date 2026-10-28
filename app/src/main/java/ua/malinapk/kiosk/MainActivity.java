@@ -1,4 +1,3 @@
-```
 package ua.malinapk.kiosk;
 
 import android.app.*;
