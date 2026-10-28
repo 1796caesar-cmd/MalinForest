@@ -27,7 +27,7 @@ import java.util.regex.*;
 public class MainActivity extends Activity {
   private static final String SITE="https://malinapk.net/";
   private static final String WEATHER_URL="https://api.open-meteo.com/v1/forecast?latitude=50.77&longitude=29.24&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code&timezone=Europe%2FKyiv&forecast_days=2";
-  private static final String NEWS_URL="https://tsn.ua/rss/full.rss";
+  private static final String[] NEWS_URLS={"https://tsn.ua/rss/full.rss", "https://www.ukrinform.ua/rss/block-lastnews"};
   private static final String HOLIDAY_URL="https://daytoday.ua/sogodni/";
   private static final int PICK_FOLDER=44;
   private final Handler handler=new Handler(Looper.getMainLooper());
@@ -151,6 +151,7 @@ public class MainActivity extends Activity {
       try{
         JSONArray saved=new JSONArray(getPreferences(0).getString("holiday_cache","[]"));
         for(int i=0;i<saved.length();i++)holidays.add(saved.getString(i));
+        holidays.removeIf(x->x.toLowerCase(Locale.ROOT).contains("іменини")||x.toLowerCase(Locale.ROOT).contains("хто народився"));
         if(!holidays.isEmpty())holidaySwitcher.setCurrentText(holidays.get(0));
       }catch(Exception ignored){}
     }
@@ -324,32 +325,72 @@ public class MainActivity extends Activity {
     }catch(Exception ignored){}
     final String ww=w,ff=f;runOnUiThread(()->{weather.setText(ww);forecast.setText(ff);});
   }).start();}
-  private void loadNews(){new Thread(()->{
-    try{
-      String xml=fetch(NEWS_URL);
-      XmlPullParser p=XmlPullParserFactory.newInstance().newPullParser();p.setInput(new StringReader(xml));
-      ArrayList<String> titles=new ArrayList<>();boolean inItem=false,inTitle=false;
-      int event=p.getEventType();
-      while(event!=XmlPullParser.END_DOCUMENT&&titles.size()<18){
-        if(event==XmlPullParser.START_TAG){
-          String name=p.getName();if("item".equalsIgnoreCase(name))inItem=true;
-          if(inItem&&"title".equalsIgnoreCase(name))inTitle=true;
-        }else if(event==XmlPullParser.TEXT&&inItem&&inTitle){
-          String s=p.getText().trim();if(!s.isEmpty()&&!titles.contains(s))titles.add(s);
-        }else if(event==XmlPullParser.END_TAG){
-          if("title".equalsIgnoreCase(p.getName()))inTitle=false;
-          if("item".equalsIgnoreCase(p.getName()))inItem=false;
-        }
-        event=p.next();
-      }
-      if(!titles.isEmpty()){
-        String joined=TextUtils.join("     ●     ",titles)+"     ●     ";
-        getPreferences(0).edit().putString("news_cache",joined).apply();
-        runOnUiThread(()->{cachedNews=joined;tickerText.setText(joined);tickerViewport.post(this::startTicker);});
-      }
-    }catch(Exception ignored){
-      if(cachedNews.isEmpty())runOnUiThread(()->tickerText.setText("Новини тимчасово недоступні"));
+  // A rule-based fact ticker: never invent details not present in the feed.
+  private boolean clickbait(String s){
+    String v=s.toLowerCase(new Locale("uk","UA"));
+    return v.contains("стало відомо")||v.contains("що відомо")||v.contains("що буде")||
+      v.contains("читайте")||v.contains("подробиц")||v.contains("експерти розповіли")||
+      v.contains("шокув")||v.contains("гороскоп")||v.contains("рецепт")||
+      v.contains("назвали причину")||v.contains("все, що потрібно знати")||
+      v.endsWith("?");
+  }
+  private String factText(String title,String description){
+    String t=plain(title).replaceAll("\\s+"," ").trim();
+    String d=plain(description).replaceAll("\\s+"," ").trim();
+    // The description often begins with a clickbait title. Prefer a complete factual sentence.
+    String[] sentences=d.split("(?<=[.!?])\\s+");
+    String chosen="";
+    for(String sentence:sentences){
+      String candidate=sentence.trim();
+      if(candidate.length()<42||candidate.length()>210||clickbait(candidate))continue;
+      if(candidate.contains("©")||candidate.toLowerCase(Locale.ROOT).contains("tsn.ua"))continue;
+      if(candidate.matches(".*[.!]$")){chosen=candidate;break;}
     }
+    // Clear, self-contained factual titles are better than vague descriptions.
+    if(!clickbait(t)&&t.length()>=38&&t.length()<=170&&
+       (t.matches(".*[0-9].*")||t.matches("(?iu).*(ухвалив|підписав|відкрили|запровадили|загинули|пошкоджено|отримала|повідомило|затвердив|завершили|збудували|відновили|знищили|засіяли|передали|збільшив|зменшив|розпочали|призначив|затримали|запустили|евакуювали).*")))
+      chosen=t;
+    if(chosen.isEmpty())return "";
+    chosen=chosen.replaceAll("(?iu)\\s*[-—|]\\s*(ТСН|Укрінформ|новини України).*$","").trim();
+    if(chosen.length()>185)return "";
+    if(chosen.endsWith("."))chosen=chosen.substring(0,chosen.length()-1);
+    return chosen;
+  }
+  private ArrayList<String> readFacts(String xml) throws Exception{
+    XmlPullParser p=XmlPullParserFactory.newInstance().newPullParser();
+    p.setInput(new StringReader(xml));
+    ArrayList<String> facts=new ArrayList<>();
+    boolean inItem=false;String title="",description="";
+    int event=p.getEventType();
+    while(event!=XmlPullParser.END_DOCUMENT&&facts.size()<18){
+      if(event==XmlPullParser.START_TAG){
+        String tag=p.getName();
+        if("item".equalsIgnoreCase(tag)||"entry".equalsIgnoreCase(tag)){
+          inItem=true;title="";description="";
+        }else if(inItem&&"title".equalsIgnoreCase(tag))title=p.nextText();
+        else if(inItem&&("description".equalsIgnoreCase(tag)||"summary".equalsIgnoreCase(tag)))description=p.nextText();
+      }else if(event==XmlPullParser.END_TAG&&inItem&&
+          ("item".equalsIgnoreCase(p.getName())||"entry".equalsIgnoreCase(p.getName()))){
+        inItem=false;String fact=factText(title,description);
+        if(!fact.isEmpty()&&!facts.contains(fact))facts.add(fact);
+      }
+      event=p.next();
+    }
+    return facts;
+  }
+  private void loadNews(){new Thread(()->{
+    LinkedHashSet<String> facts=new LinkedHashSet<>();
+    for(String source:NEWS_URLS){
+      try{for(String item:readFacts(fetch(source))){
+        if(facts.size()>=25)break;
+        facts.add(item);
+      }}catch(Exception ignored){}
+    }
+    if(!facts.isEmpty()){
+      String joined=TextUtils.join("     ●     ",facts)+"     ●     ";
+      getPreferences(0).edit().putString("news_cache",joined).apply();
+      runOnUiThread(()->{cachedNews=joined;tickerText.setText(joined);tickerViewport.post(this::startTicker);});
+    }else if(cachedNews.isEmpty())runOnUiThread(()->tickerText.setText("Інформаційні новини тимчасово недоступні"));
   }).start();}
   private String plain(String s){
     String cleaned=s.replaceAll("(?is)<script[^>]*>.*?</script>"," ").replaceAll("(?is)<style[^>]*>.*?</style>"," ");
@@ -367,6 +408,9 @@ public class MainActivity extends Activity {
       while(m.find()&&result.size()<24){
         String s=plain(m.group(1));
         if(s.length()>=12&&s.length()<=105&&
+           !s.matches("(?iu).*(іменини|іменинник|хто народився|народилися сьогодні|дні народження|день народження відомих|народження знаменитостей|імена сьогодні).*")&&
+           !s.toLowerCase(Locale.ROOT).contains("іменини")&&
+           !s.toLowerCase(Locale.ROOT).contains("хто народився")&&
           (s.matches("(?iu)^(?:Всесвітній|Міжнародний|Всеукраїнський|Національний|Європейський|День|Річниця|Свято|Доба|Тиждень)\\b.*")||
            s.matches("(?iu)^.*\\bдень\\b.*"))&&
            !s.toLowerCase(Locale.ROOT).contains("календар")&&
