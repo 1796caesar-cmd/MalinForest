@@ -43,6 +43,7 @@ public class MainActivity extends Activity {
   private Uri folder;
   private long lastTouch;
   private String cachedNews="";
+  private String pendingNews=null;
   private String holidayDate="";
   private final Runnable idle=()->{if(siteOpen&&System.currentTimeMillis()-lastTouch>=timeout)showVideo();};
   private final Runnable tick=new Runnable(){@Override public void run(){updateClock();handler.postDelayed(this,1000);}};
@@ -73,7 +74,15 @@ public class MainActivity extends Activity {
     web.getSettings().setDomStorageEnabled(true);
     web.getSettings().setMediaPlaybackRequiresUserGesture(false);
     web.getSettings().setAllowFileAccess(false);
-    web.setWebViewClient(new WebViewClient());web.setWebChromeClient(new WebChromeClient());
+    web.setWebViewClient(new WebViewClient(){
+      @Override public boolean shouldOverrideUrlLoading(WebView view, String url){
+        return blockSocial(url);
+      }
+      @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request){
+        return blockSocial(request.getUrl().toString());
+      }
+    });
+    web.setWebChromeClient(new WebChromeClient());
     web.setVisibility(View.GONE);
     FrameLayout.LayoutParams webParams=new FrameLayout.LayoutParams(-1,-1);
     webParams.topMargin=dp(86);
@@ -151,7 +160,7 @@ public class MainActivity extends Activity {
       try{
         JSONArray saved=new JSONArray(getPreferences(0).getString("holiday_cache","[]"));
         for(int i=0;i<saved.length();i++)holidays.add(saved.getString(i));
-        holidays.removeIf(x->x.toLowerCase(Locale.ROOT).contains("іменини")||x.toLowerCase(Locale.ROOT).contains("хто народився"));
+        holidays.removeIf(this::excludeHoliday);
         if(!holidays.isEmpty())holidaySwitcher.setCurrentText(holidays.get(0));
       }catch(Exception ignored){}
     }
@@ -177,18 +186,63 @@ public class MainActivity extends Activity {
     handler.post(tick);handler.post(refresh);handler.postDelayed(rotateHoliday,20000);
   }
 
+  // Забороняємо відкривати соцмережі, включно з їхніми deep-link адресами.
+  private boolean blockSocial(String address){
+    if(address==null)return false;
+    String lower=address.toLowerCase(Locale.ROOT);
+    try{
+      Uri uri=Uri.parse(address);
+      String host=uri.getHost();
+      if(host!=null){
+        host=host.toLowerCase(Locale.ROOT);
+        String[] domains={"instagram.com","facebook.com","fb.com","fb.watch",
+          "youtube.com","youtu.be","m.youtube.com","youtube-nocookie.com",
+          "threads.net","messenger.com"};
+        for(String domain:domains)
+          if(host.equals(domain)||host.endsWith("."+domain))return true;
+      }
+    }catch(Exception ignored){}
+    return lower.startsWith("instagram:")||lower.startsWith("fb:")||
+      lower.startsWith("fb-messenger:")||lower.startsWith("youtube:")||
+      lower.startsWith("intent://instagram")||lower.startsWith("intent://youtube")||
+      lower.contains("package=com.instagram.android")||
+      lower.contains("package=com.facebook.katana")||
+      lower.contains("package=com.google.android.youtube");
+  }
+
+  // Текст дублюється, щоб після останньої новини без паузи йшла перша.
   private void startTicker(){
     if(tickerViewport==null||tickerText==null)return;
     tickerText.clearAnimation();
-    int width=tickerViewport.getWidth();
-    if(width<=0){tickerViewport.postDelayed(this::startTicker,250);return;}
-    String content=tickerText.getText().toString();
-    int textWidth=(int)Math.ceil(tickerText.getPaint().measureText(content))+dp(24);
+    int viewportWidth=tickerViewport.getWidth();
+    if(viewportWidth<=0){tickerViewport.postDelayed(this::startTicker,250);return;}
+    String unit=cachedNews.trim();
+    if(unit.isEmpty())unit="Завантажуємо новини…     ●     ";
+    if(!unit.endsWith("     ●     "))unit+="     ●     ";
+    int unitWidth=(int)Math.ceil(tickerText.getPaint().measureText(unit));
+    if(unitWidth<=0)return;
+    int copies=Math.max(2,2+viewportWidth/unitWidth);
+    StringBuilder repeated=new StringBuilder(unit.length()*copies);
+    for(int i=0;i<copies;i++)repeated.append(unit);
+    tickerText.setText(repeated.toString());
     FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)tickerText.getLayoutParams();
-    p.width=textWidth;tickerText.setLayoutParams(p);
-    TranslateAnimation move=new TranslateAnimation(width,-textWidth,0,0);
-    move.setDuration(Math.max(6000,(long)((width+textWidth)*1000.0/dp(70))));
-    move.setRepeatCount(Animation.INFINITE);move.setInterpolator(new LinearInterpolator());
+    p.width=(int)Math.ceil(tickerText.getPaint().measureText(repeated.toString()))+dp(4);
+    tickerText.setLayoutParams(p);
+    TranslateAnimation move=new TranslateAnimation(0,-unitWidth,0,0);
+    move.setDuration(Math.max(3000,(long)(unitWidth*1000.0/dp(70))));
+    move.setRepeatCount(Animation.INFINITE);
+    move.setInterpolator(new LinearInterpolator());
+    move.setAnimationListener(new Animation.AnimationListener(){
+      @Override public void onAnimationStart(Animation animation){}
+      @Override public void onAnimationEnd(Animation animation){}
+      @Override public void onAnimationRepeat(Animation animation){
+        if(pendingNews!=null){
+          cachedNews=pendingNews;
+          pendingNews=null;
+          tickerViewport.post(()->startTicker());
+        }
+      }
+    });
     tickerText.startAnimation(move);
   }
 
@@ -389,13 +443,28 @@ public class MainActivity extends Activity {
     if(!facts.isEmpty()){
       String joined=TextUtils.join("     ●     ",facts)+"     ●     ";
       getPreferences(0).edit().putString("news_cache",joined).apply();
-      runOnUiThread(()->{cachedNews=joined;tickerText.setText(joined);tickerViewport.post(this::startTicker);});
+      runOnUiThread(()->{
+        if(cachedNews.isEmpty()){
+          cachedNews=joined;
+          tickerViewport.post(this::startTicker);
+        }else if(!cachedNews.equals(joined)){
+          pendingNews=joined;
+        }
+      });
     }else if(cachedNews.isEmpty())runOnUiThread(()->tickerText.setText("Інформаційні новини тимчасово недоступні"));
   }).start();}
   private String plain(String s){
     String cleaned=s.replaceAll("(?is)<script[^>]*>.*?</script>"," ").replaceAll("(?is)<style[^>]*>.*?</style>"," ");
     cleaned=cleaned.replaceAll("(?is)<[^>]+>"," ");
     return Html.fromHtml(cleaned,Html.FROM_HTML_MODE_LEGACY).toString().replaceAll("\\s+"," ").trim();
+  }
+  private boolean excludeHoliday(String value){
+    String s=value.toLowerCase(new Locale("uk","UA"));
+    return s.contains("іменин")||s.contains("імена сьогодні")||
+      s.contains("день ангела")||s.contains("дні ангела")||
+      s.contains("ангела сьогодні")||s.contains("хто народився")||
+      s.contains("народилися сьогодні")||s.contains("народження знаменитост")||
+      s.contains("день народження відомих")||s.contains("дні народження відомих");
   }
   private void loadHolidays(){new Thread(()->{
     try{
@@ -407,7 +476,7 @@ public class MainActivity extends Activity {
       Matcher m=headings.matcher(html);
       while(m.find()&&result.size()<24){
         String s=plain(m.group(1));
-        if(s.length()>=12&&s.length()<=105&&
+        if(s.length()>=12&&s.length()<=105&&!excludeHoliday(s)&&
            !s.matches("(?iu).*(іменини|іменинник|хто народився|народилися сьогодні|дні народження|день народження відомих|народження знаменитостей|імена сьогодні).*")&&
            !s.toLowerCase(Locale.ROOT).contains("іменини")&&
            !s.toLowerCase(Locale.ROOT).contains("хто народився")&&
