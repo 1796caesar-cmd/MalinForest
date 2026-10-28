@@ -27,7 +27,9 @@ import java.util.regex.*;
 public class MainActivity extends Activity {
   private static final String SITE="https://malinapk.net/";
   private static final String WEATHER_URL="https://api.open-meteo.com/v1/forecast?latitude=50.77&longitude=29.24&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code&timezone=Europe%2FKyiv&forecast_days=2";
-  private static final String[] NEWS_URLS={"https://tsn.ua/rss/full.rss", "https://www.ukrinform.ua/rss/block-lastnews"};
+  private static final String[] NEWS_URLS={"https://www.openforest.org.ua/feed/", "https://www.openforest.org.ua/section/news/feed/"};
+  private static final String FOREST_HOME="https://www.openforest.org.ua/";
+  private static final int NEWS_CACHE_VERSION=3;
   private static final String HOLIDAY_URL="https://daytoday.ua/sogodni/";
   private static final int HOLIDAY_CACHE_VERSION=2;
   private static final int PICK_FOLDER=44;
@@ -116,17 +118,18 @@ public class MainActivity extends Activity {
     root.addView(bottomPanel,bp);
     LinearLayout newsRow=new LinearLayout(this);newsRow.setGravity(Gravity.CENTER_VERTICAL);
     bottomPanel.addView(newsRow,new FrameLayout.LayoutParams(-1,-1));
-    TextView newsBadge=label("ТСН  •  НОВИНИ",13,true);
+    TextView newsBadge=label("ЛІСОВІ НОВИНИ",13,true);
     newsBadge.setSingleLine(true);newsBadge.setPadding(dp(10),dp(7),dp(10),dp(7));
     newsBadge.setBackground(bg(0xAA37684B,7));
     newsRow.addView(newsBadge,new LinearLayout.LayoutParams(-2,-2));
     tickerViewport=new FrameLayout(this);tickerViewport.setClipChildren(true);
     LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(0,dp(48),1);
     tp.leftMargin=dp(12);newsRow.addView(tickerViewport,tp);
-    tickerText=label("Завантажуємо новини ТСН…",17,false);
+    tickerText=label("Завантажуємо лісові новини…",17,false);
     tickerText.setSingleLine(true);tickerText.setGravity(Gravity.CENTER_VERTICAL);
     tickerViewport.addView(tickerText,new FrameLayout.LayoutParams(-2,-1));
-    cachedNews=getPreferences(0).getString("news_cache","");
+    cachedNews=getPreferences(0).getInt("news_cache_version",0)==NEWS_CACHE_VERSION
+      ?getPreferences(0).getString("news_cache",""):"";
     if(!cachedNews.isEmpty())tickerText.setText(cachedNews);
     tickerViewport.post(this::startTicker);
 
@@ -405,6 +408,7 @@ public class MainActivity extends Activity {
     if(!clickbait(t)&&t.length()>=38&&t.length()<=170&&
        (t.matches(".*[0-9].*")||t.matches("(?iu).*(ухвалив|підписав|відкрили|запровадили|загинули|пошкоджено|отримала|повідомило|затвердив|завершили|збудували|відновили|знищили|засіяли|передали|збільшив|зменшив|розпочали|призначив|затримали|запустили|евакуювали).*")))
       chosen=t;
+    if(chosen.isEmpty()&&suitableForestNews(t))chosen=t;
     if(chosen.isEmpty())return "";
     chosen=chosen.replaceAll("(?iu)\\s*[-—|]\\s*(ТСН|Укрінформ|новини України).*$","").trim();
     if(chosen.length()>185)return "";
@@ -433,17 +437,53 @@ public class MainActivity extends Activity {
     }
     return facts;
   }
+  // Оцінки, політичні коментарі й клікбейт не потрапляють до інформаційної стрічки.
+  private boolean suitableForestNews(String text){
+    String s=text.toLowerCase(new Locale("uk","UA"));
+    if(s.length()<27||s.length()>190||clickbait(s))return false;
+    if(s.matches(".*[ыэъёЫЭЪЁ].*"))return false; // Без машинного перекладу російськомовних заголовків.
+    String[] reject={"думка", "колонка", "інтерв'ю", "хто винен", "скандал", "сенсац",
+      "відповіді dm", "велика брехня", "троянський кінь", "чи врятує", "що відомо", "що чекати"};
+    for(String word:reject)if(s.contains(word))return false;
+    String[] topics={"ліс", "дерев", "лісниц", "деревооброб", "пиломатеріал", "заготівл",
+      "рубк", "пожеж", "довкіл", "природ", "еколог", "дрон", "eudr", "аукціон", "меблев"};
+    for(String word:topics)if(s.contains(word))return true;
+    return false;
+  }
+  // Запасний варіант для сайту, якщо RSS тимчасово недоступний.
+  private ArrayList<String> readForestHome(String html){
+    ArrayList<String> result=new ArrayList<>();
+    Pattern p=Pattern.compile("(?is)<h3\\b[^>]*>(.*?)</h3>");
+    Matcher m=p.matcher(html);
+    while(m.find()&&result.size()<20){
+      String heading=plain(m.group(1)).replaceAll("\\s+"," ").trim();
+      if(suitableForestNews(heading)&&!result.contains(heading))result.add(heading);
+    }
+    return result;
+  }
   private void loadNews(){new Thread(()->{
     LinkedHashSet<String> facts=new LinkedHashSet<>();
     for(String source:NEWS_URLS){
-      try{for(String item:readFacts(fetch(source))){
-        if(facts.size()>=25)break;
-        facts.add(item);
-      }}catch(Exception ignored){}
+      try{
+        for(String item:readFacts(fetch(source))){
+          if(suitableForestNews(item))facts.add(item);
+          if(facts.size()>=25)break;
+        }
+      }catch(Exception ignored){}
+      if(facts.size()>=25)break;
+    }
+    if(facts.size()<6){
+      try{
+        for(String item:readForestHome(fetch(FOREST_HOME))){
+          facts.add(item);
+          if(facts.size()>=25)break;
+        }
+      }catch(Exception ignored){}
     }
     if(!facts.isEmpty()){
       String joined=TextUtils.join("     ●     ",facts)+"     ●     ";
-      getPreferences(0).edit().putString("news_cache",joined).apply();
+      getPreferences(0).edit().putInt("news_cache_version",NEWS_CACHE_VERSION)
+        .putString("news_cache",joined).apply();
       runOnUiThread(()->{
         if(cachedNews.isEmpty()){
           cachedNews=joined;
@@ -452,7 +492,10 @@ public class MainActivity extends Activity {
           pendingNews=joined;
         }
       });
-    }else if(cachedNews.isEmpty())runOnUiThread(()->tickerText.setText("Інформаційні новини тимчасово недоступні"));
+    }else if(cachedNews.isEmpty())runOnUiThread(()->{
+      cachedNews="Лісові новини тимчасово недоступні     ●     ";
+      tickerViewport.post(this::startTicker);
+    });
   }).start();}
   private String plain(String s){
     String cleaned=s.replaceAll("(?is)<script[^>]*>.*?</script>"," ").replaceAll("(?is)<style[^>]*>.*?</style>"," ");
