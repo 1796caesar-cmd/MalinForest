@@ -30,7 +30,7 @@ public class MainActivity extends Activity {
   private static final String[] NEWS_URLS={"https://www.openforest.org.ua/feed/", "https://www.openforest.org.ua/section/news/feed/"};
   private static final String FOREST_HOME="https://www.openforest.org.ua/";
   private static final String FOREST_NEWS="https://www.openforest.org.ua/section/news/";
-  private static final int NEWS_CACHE_VERSION=7;
+  private static final int NEWS_CACHE_VERSION=9;
   private static final String HOLIDAY_URL="https://daytoday.ua/sogodni/";
   private static final int HOLIDAY_CACHE_VERSION=2;
   private static final int PICK_FOLDER=44;
@@ -483,23 +483,23 @@ public class MainActivity extends Activity {
     return distinct>=2;
   }
   // Заголовки сторінок, а також посилання на публікації в блоках, де немає h3.
-  private ArrayList<String> readForestHome(String html){
+  // Не додаємо скорочені заголовки з карток сайту.
+  private boolean completeNewsTitle(String text){
+    if(text==null)return false;
+    String t=text.trim();
+    return !t.endsWith("...")&&!t.endsWith("…");
+  }
+  // WordPress REST API повертає лише записи типу post, а не меню чи кнопки.
+  private ArrayList<String> readForestPosts(String json) throws Exception{
+    JSONArray posts=new JSONArray(json);
     LinkedHashSet<String> result=new LinkedHashSet<>();
-    Pattern heading=Pattern.compile("(?is)<h[234]\\b[^>]*>(.*?)</h[234]>");
-    Matcher m=heading.matcher(html);
-    while(m.find()&&result.size()<30){
-      String name=plain(m.group(1)).replaceAll("\\s+"," ").trim();
-      if(suitableForestNews(name))result.add(name);
-    }
-    // WordPress-теми часто використовують заголовки-посилання без h3.
-    Pattern link=Pattern.compile("(?is)<a\\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>");
-    Matcher lm=link.matcher(html);
-    while(lm.find()&&result.size()<30){
-      String href=lm.group(1).toLowerCase(Locale.ROOT);
-      if(!href.contains("openforest.org.ua/")||href.contains("/section/")||
-         href.contains("/page/")||href.contains("/tag/")||href.contains("/author/"))continue;
-      String name=plain(lm.group(2)).replaceAll("\\s+"," ").trim();
-      if(suitableForestNews(name))result.add(name);
+    for(int i=0;i<posts.length()&&result.size()<40;i++){
+      JSONObject post=posts.optJSONObject(i);
+      if(post==null||!"publish".equals(post.optString("status","publish")))continue;
+      JSONObject title=post.optJSONObject("title");
+      if(title==null)continue;
+      String heading=plain(title.optString("rendered", ""));
+      if(completeNewsTitle(heading)&&suitableForestNews(heading))result.add(heading);
     }
     return new ArrayList<>(result);
   }
@@ -520,7 +520,7 @@ public class MainActivity extends Activity {
           ("item".equalsIgnoreCase(p.getName())||"entry".equalsIgnoreCase(p.getName()))){
         inItem=false;
         String heading=plain(title).replaceAll("\\s+"," ").trim();
-        if(suitableForestNews(heading))result.add(heading);
+        if(completeNewsTitle(heading)&&suitableForestNews(heading))result.add(heading);
       }
       event=p.next();
     }
@@ -528,27 +528,22 @@ public class MainActivity extends Activity {
   }
   private void loadNews(){new Thread(()->{
     LinkedHashSet<String> facts=new LinkedHashSet<>();
-    // Кілька сторінок архіву, а не лише головна і перші дві сторінки.
-    // Зупиняємось на 20 різних новинах.
-    for(int page=1;page<=8&&facts.size()<20;page++){
-      String url=page==1?FOREST_NEWS:FOREST_NEWS+"page/"+page+"/";
-      try{
-        for(String item:readForestHome(fetch(url))){
-          facts.add(item);
-          if(facts.size()>=20)break;
-        }
-      }catch(Exception ignored){}
-    }
-    if(facts.size()<20){
-      try{for(String item:readForestHome(fetch(FOREST_HOME))){
-        facts.add(item);if(facts.size()>=20)break;
-      }}catch(Exception ignored){}
-    }
-    if(facts.size()<20)for(String source:NEWS_URLS){
+    // RSS містить повні заголовки; він має пріоритет над картками архіву.
+    for(String source:NEWS_URLS){
       try{for(String item:readForestFeed(fetch(source))){
         facts.add(item);if(facts.size()>=20)break;
       }}catch(Exception ignored){}
       if(facts.size()>=20)break;
+    }
+    // Якщо RSS замало, отримуємо тільки реальні WordPress-публікації.
+    // Довільні HTML-посилання, меню, «Увійти» та «Коментарі» не читаємо.
+    for(int page=1;page<=4&&facts.size()<20;page++){
+      String url="https://www.openforest.org.ua/wp-json/wp/v2/posts?per_page=30&page="+page;
+      try{
+        ArrayList<String> posts=readForestPosts(fetch(url));
+        if(posts.isEmpty())break;
+        for(String item:posts){facts.add(item);if(facts.size()>=20)break;}
+      }catch(Exception ignored){break;}
     }
     if(!facts.isEmpty()){
       String joined=TextUtils.join("     ●     ",facts)+"     ●     ";
