@@ -755,7 +755,7 @@ public class MainActivity extends Activity {
     if(!siteOpen&&video!=null&&!playlist.isEmpty()&&!video.isPlaying())video.start();}
   @Override protected void onPause(){if(video!=null&&video.isPlaying())video.pause();super.onPause();}
   @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);
-    if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();super.onDestroy();}
+    if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();stopBirthdayMusic();super.onDestroy();}
   // Читаємо XLSX як стандартний ZIP/XML без сторонніх залежностей.
   private Uri dataFile(String name){
     if(dataFolder==null)return null;
@@ -897,6 +897,6 @@ public class MainActivity extends Activity {
     handler.postDelayed(this::showNextBirthday,60000);
   }
 
-  @Override protected void onDestroy(){stopBirthdayMusic();super.onDestroy();}
+
 
 }
