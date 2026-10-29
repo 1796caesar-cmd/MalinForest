@@ -77,7 +77,10 @@ public class MainActivity extends Activity {
   private String currentCategory="";
   private final ArrayList<String> activeCategories=new ArrayList<>();
   private boolean tickerRunning=false;
-  private static class Person {String name;int day,month,year;Person(String n,int d,int m,int y){name=n;day=d;month=m;year=y;}}
+  private static class Person {String name,position,department;int day,month,year;Person(String n,String pos,String dep,int d,int m,int y){name=n;position=pos;department=dep;day=d;month=m;year=y;}}
+  private boolean isManagement(Person p){return p.department!=null&&p.department.trim().replaceAll("\\s+"," ").equalsIgnoreCase("Апарату управління");}
+  private String birthdayDetail(Person p){String pos=p.position==null?"":p.position.trim(),dep=p.department==null?"":p.department.trim();return pos.isEmpty()?dep:(dep.isEmpty()?pos:pos+" • "+dep);}
+  private String birthdayEntry(Person p,boolean monthly){String first=(monthly?String.format(new Locale("uk","UA"),"%02d.%02d ● ",p.day,p.month):"")+p.name;String detail=birthdayDetail(p);return detail.isEmpty()?first:first+"\n"+detail;}
   private boolean enabled(String key){return getPreferences(0).getBoolean(key,true);}
   private boolean anyTicker(){return enabled("news")||enabled("facts");}
 
@@ -396,10 +399,10 @@ public class MainActivity extends Activity {
       Collections.sort(sorted,(a,b)->{int d=Integer.compare(a.day,b.day);return d!=0?d:a.name.compareToIgnoreCase(b.name);});
       for(Person person:sorted)if(person.month==month&&person.day!=day){
         titles.add("ІМЕНИННИКИ МІСЯЦЯ");
-        entries.add(String.format(new Locale("uk","UA"),"%02d.%02d — %s",person.day,person.month,person.name));
+        entries.add(birthdayEntry(person,true));
       }
       for(Person person:sorted)if(person.month==month&&person.day==day){
-        titles.add("ІМЕНИННИКИ ДНЯ");entries.add(person.name);
+        titles.add("ІМЕНИННИКИ ДНЯ");entries.add(birthdayEntry(person,false));
       }
     }
     if(entries.isEmpty()){
@@ -875,7 +878,7 @@ public class MainActivity extends Activity {
     try{Uri f=dataFile("Іменинники.xlsx");if(f==null)f=dataFile("MalinForest_Іменинники.xlsx");if(f!=null){LinkedHashMap<String,ArrayList<String[]>> wb=readWorkbook(f);
       for(String[] row:wb.values().iterator().next()){
         String name=(row[0]+" "+row[1]+" "+row[2]).trim();if(name.isEmpty()||row[0].equalsIgnoreCase("Прізвище"))continue;
-        int[] d=parseBirthday(row[3]);if(d!=null)newPeople.add(new Person(name,d[0],d[1],d[2]));
+        int[] d=parseBirthday(row[5]);if(d!=null)newPeople.add(new Person(name,row[3],row[4],d[0],d[1],d[2]));
       }}else errors+="Немає Іменинники.xlsx. ";}catch(Exception ex){errors+="Помилка Іменинники.xlsx: "+ex.getMessage();}
     String finalErrors=errors;runOnUiThread(()->{facts.clear();facts.putAll(newFacts);people.clear();people.addAll(newPeople);
       factOrders.clear();
@@ -921,7 +924,7 @@ public class MainActivity extends Activity {
     String key=todayKey()+"_"+hhmm;
     if(key.equals(lastBirthdaySlot)||getPreferences(0).getBoolean("birthday_shown_"+key,false))return;
     birthdayQueue.clear();int day=c.get(Calendar.DAY_OF_MONTH),month=c.get(Calendar.MONTH)+1;
-    for(Person p:people)if(p.day==day&&p.month==month)birthdayQueue.add(p);
+    for(Person p:people)if(p.day==day&&p.month==month&&isManagement(p))birthdayQueue.add(p);
     if(birthdayQueue.isEmpty())return;
     lastBirthdaySlot=key;
     getPreferences(0).edit().putBoolean("birthday_shown_"+key,true).apply();
