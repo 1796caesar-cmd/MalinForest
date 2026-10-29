@@ -907,9 +907,8 @@ public class MainActivity extends Activity {
     ImageView bg=gameImage("Games","background.png");bg.setScaleType(ImageView.ScaleType.CENTER_CROP);
     gameOverlay.addView(bg,new FrameLayout.LayoutParams(-1,-1));
     if(topPanel!=null)topPanel.setVisibility(View.GONE);
-    gameTimerLabel=gameText("◷ 01:00",20,Color.WHITE);gameTimerLabel.setBackground(bg(0xD0205637,12));
-    FrameLayout.LayoutParams tp=new FrameLayout.LayoutParams(dp(115),dp(48),Gravity.LEFT|Gravity.TOP);
-    tp.setMargins(dp(12),dp(12),0,0);gameOverlay.addView(gameTimerLabel,tp);
+    // Таймер бездіяльності працює приховано: не додаємо лічильник на екран.
+    gameTimerLabel=null;
     gameResetIdle();
   }
   private void closeGames(){
@@ -988,17 +987,22 @@ public class MainActivity extends Activity {
     FrameLayout.LayoutParams fp=new FrameLayout.LayoutParams(-1,dp(52),Gravity.BOTTOM);fp.bottomMargin=dp(gameMode==0?122:85);
     gameOverlay.addView(feedback,fp);
     if(gameMode==0){
-      HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.setHorizontalScrollBarEnabled(false);
-      FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(-1,dp(122),Gravity.BOTTOM);sp.bottomMargin=dp(12);sp.leftMargin=dp(8);sp.rightMargin=dp(165);
-      gameOverlay.addView(scroll,sp);
-      LinearLayout row=new LinearLayout(this);scroll.addView(row);
-      int width=Math.max(dp(96),(getResources().getDisplayMetrics().widthPixels-dp(190))/Math.max(1,remainingTrees.size()));
+      // Усі дерева завжди в одному рядку: ширина ділиться порівну без прокручування.
+      LinearLayout row=new LinearLayout(this);row.setOrientation(LinearLayout.HORIZONTAL);
+      row.setGravity(Gravity.CENTER_VERTICAL);
+      FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(-1,dp(122),Gravity.BOTTOM);
+      sp.bottomMargin=dp(12);sp.leftMargin=dp(6);sp.rightMargin=dp(165);
+      gameOverlay.addView(row,sp);
       for(String tree:remainingTrees){
-        LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setBackground(bg(0xDDEAF1DE,10));
-        LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(width,dp(118));bp.setMargins(dp(3),0,dp(3),0);row.addView(card,bp);
-        ImageView img=gameImage("Games","DeYaRostu","Дерева",tree+".jpg");card.addView(img,new LinearLayout.LayoutParams(-1,0,1));
+        LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(bg(0xDDEAF1DE,10));
+        LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(0,dp(118),1f);
+        bp.setMargins(dp(2),0,dp(2),0);row.addView(card,bp);
+        ImageView img=gameImage("Games","DeYaRostu","Дерева",tree+".jpg");
+        card.addView(img,new LinearLayout.LayoutParams(-1,0,1));
         int idx=Arrays.asList(treeNames).indexOf(tree);
-        TextView lbl=gameText(idx>=0?treeLabels[idx]:tree,11,0xFF173D29);lbl.setShadowLayer(0,0,0,0);
+        TextView lbl=gameText(idx>=0?treeLabels[idx]:tree,10,0xFF173D29);
+        lbl.setShadowLayer(0,0,0,0);lbl.setMaxLines(2);lbl.setEllipsize(TextUtils.TruncateAt.END);
         card.addView(lbl,new LinearLayout.LayoutParams(-1,dp(36)));
         card.setOnClickListener(v->gameAnswer(tree.equals(item),tree,feedback));
       }
@@ -1006,10 +1010,11 @@ public class MainActivity extends Activity {
       LinearLayout choices=new LinearLayout(this);choices.setGravity(Gravity.CENTER);
       FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,dp(75),Gravity.BOTTOM);bp.bottomMargin=dp(12);bp.rightMargin=dp(165);bp.leftMargin=dp(20);
       gameOverlay.addView(choices,bp);
-      String[] labels=gameMode==1?new String[]{"🌲 ДИКИЙ","🏡 СВІЙСЬКИЙ"}:new String[]{"ЇСТІВНИЙ","НЕЇСТІВНИЙ"};
+      String[] labels=gameMode==1?new String[]{"ДИКИЙ\n(в лісі)","СВІЙСЬКИЙ\n(в домашніх умовах)"}:new String[]{"ЇСТІВНИЙ","НЕЇСТІВНИЙ"};
       for(int i=0;i<2;i++){
         final boolean pickedFirst=i==0;
         TextView btn=gameButton(labels[i],i==0?0xE322733D:0xDDA74B30);
+        if(gameMode==1){btn.setSingleLine(false);btn.setMaxLines(2);btn.setTextSize(18);btn.setGravity(Gravity.CENTER);}
         LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(0,dp(65),1);cp.setMargins(dp(8),0,dp(8),0);choices.addView(btn,cp);
         btn.setOnClickListener(v->gameAnswer(pickedFirst==gameCorrect(item),item,feedback));
       }
@@ -1039,7 +1044,7 @@ public class MainActivity extends Activity {
   }
   private void showGameEnd(){
     gameFinished=true;gameShell();
-    TextView msg=gameText(gameLives==0?"Життя закінчилися!":"Молодець! Усі відповіді правильні!",30,Color.WHITE);
+    TextView msg=gameText(gameLives==0?"Гру завершено":"Молодець! Усі відповіді правильні!",30,Color.WHITE);
     FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(-1,dp(95),Gravity.CENTER);gameOverlay.addView(msg,mp);
     LinearLayout buttons=new LinearLayout(this);buttons.setGravity(Gravity.CENTER);
     FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,dp(80),Gravity.BOTTOM);bp.bottomMargin=dp(65);gameOverlay.addView(buttons,bp);
