@@ -63,7 +63,10 @@ public class MainActivity extends Activity {
   private final Random factRandom=new Random();
   private final ArrayList<Person> people=new ArrayList<>();
   private final ArrayList<String> topItems=new ArrayList<>();
-  private TextView newsBadge, holidayLabel;
+  private TextView newsBadge;
+  private TextSwitcher holidayLabel;
+  private String currentTopSignature="";
+  private int topCursor=0;
   private FrameLayout birthdayOverlay;
   private boolean birthdayShowing=false;
   private MediaPlayer birthdayMusic;
@@ -87,8 +90,9 @@ public class MainActivity extends Activity {
   }};
   private final Runnable rotateHoliday=new Runnable(){@Override public void run(){
     updateTopRotation();
-    handler.postDelayed(this,20000);
+    handler.postDelayed(this,topIntervalSeconds()*1000L);
   }};
+  private int topIntervalSeconds(){int n=getPreferences(0).getInt("top_interval_seconds",20);return n>=5&&n<=30&&n%5==0?n:20;}
   private int dp(float v){return (int)(v*getResources().getDisplayMetrics().density+.5f);}
   private GradientDrawable bg(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
   private TextView label(String s,int sp,boolean bold){TextView t=new TextView(this);t.setText(s);t.setTextColor(Color.WHITE);t.setTextSize(sp);if(bold)t.setTypeface(null,Typeface.BOLD);return t;}
@@ -174,9 +178,10 @@ public class MainActivity extends Activity {
     LinearLayout holidayBox=new LinearLayout(this);holidayBox.setGravity(Gravity.CENTER);
     holidayBox.setOrientation(LinearLayout.VERTICAL);
     top.addView(holidayBox,new LinearLayout.LayoutParams(0,-1,4));
-    holidayLabel=label("СЬОГОДНІ ВІДЗНАЧАЮТЬ",11,false);
-    holidayLabel.setTextColor(0xFFBED7C7);holidayLabel.setGravity(Gravity.CENTER);
+    holidayLabel=new TextSwitcher(this);
+    holidayLabel.setFactory(()->{TextView t=label("",11,false);t.setTextColor(0xFFBED7C7);t.setGravity(Gravity.CENTER);t.setSingleLine(true);return t;});
     holidayBox.addView(holidayLabel);
+    holidayLabel.setCurrentText("СЬОГОДНІ ВІДЗНАЧАЮТЬ");
     holidaySwitcher=new TextSwitcher(this);
     holidaySwitcher.setFactory(()->{
       TextView t=label("",15,true);t.setGravity(Gravity.CENTER);t.setMaxLines(2);
@@ -187,6 +192,9 @@ public class MainActivity extends Activity {
     TranslateAnimation in=new TranslateAnimation(0,0,dp(55),0);
     in.setDuration(800);in.setInterpolator(new AccelerateDecelerateInterpolator());
     holidaySwitcher.setOutAnimation(out);holidaySwitcher.setInAnimation(in);
+    TranslateAnimation titleOut=new TranslateAnimation(0,0,0,-dp(20));titleOut.setDuration(800);titleOut.setInterpolator(new AccelerateDecelerateInterpolator());
+    TranslateAnimation titleIn=new TranslateAnimation(0,0,dp(20),0);titleIn.setDuration(800);titleIn.setInterpolator(new AccelerateDecelerateInterpolator());
+    holidayLabel.setOutAnimation(titleOut);holidayLabel.setInAnimation(titleIn);
     holidayBox.addView(holidaySwitcher,new LinearLayout.LayoutParams(-1,dp(44)));
     holidaySwitcher.setCurrentText("Завантажуємо свята…");
     holidayDate=getPreferences(0).getString("holiday_date","");
@@ -220,7 +228,7 @@ public class MainActivity extends Activity {
     String dataSaved=getPreferences(0).getString("data_folder",null);
     if(dataSaved!=null){dataFolder=Uri.parse(dataSaved);loadData();}
     updateVisibility();
-    handler.post(tick);handler.post(refresh);handler.postDelayed(rotateHoliday,20000);
+    handler.post(tick);handler.post(refresh);handler.postDelayed(rotateHoliday,topIntervalSeconds()*1000L);
   }
 
   // Забороняємо відкривати соцмережі, включно з їхніми deep-link адресами.
@@ -377,22 +385,40 @@ public class MainActivity extends Activity {
     activeCategories.clear();if(enabled("news")&&!cachedNews.trim().isEmpty())activeCategories.add("Лісові новини");
     if(enabled("facts"))for(Map.Entry<String,ArrayList<String>> e:facts.entrySet())if(!e.getValue().isEmpty())activeCategories.add(e.getKey());
   }
+  // One entry per tick, grouped in the required order. Today's birthdays are excluded from the monthly group.
   private void updateTopRotation(){
-    topItems.clear();
-    if(enabled("holidays"))topItems.addAll(holidays);
+    ArrayList<String> titles=new ArrayList<>(), entries=new ArrayList<>();
+    if(enabled("holidays"))for(String h:holidays){if(h!=null&&!h.trim().isEmpty()){
+      titles.add("СЬОГОДНІ ВІДЗНАЧАЮТЬ");entries.add(h.trim());}}
     if(enabled("birthdays")){
-      Calendar c=Calendar.getInstance();int month=c.get(Calendar.MONTH)+1;
-      ArrayList<Person> sorted=new ArrayList<>(people);Collections.sort(sorted,(a,b)->Integer.compare(a.day,b.day));
-      for(Person person:sorted)if(person.month==month)topItems.add(String.format(new Locale("uk","UA"),"%02d.%02d — %s",person.day,person.month,person.name));
+      Calendar c=Calendar.getInstance();int month=c.get(Calendar.MONTH)+1,day=c.get(Calendar.DAY_OF_MONTH);
+      ArrayList<Person> sorted=new ArrayList<>(people);
+      Collections.sort(sorted,(a,b)->{int d=Integer.compare(a.day,b.day);return d!=0?d:a.name.compareToIgnoreCase(b.name);});
+      for(Person person:sorted)if(person.month==month&&person.day!=day){
+        titles.add("ІМЕНИННИКИ МІСЯЦЯ");
+        entries.add(String.format(new Locale("uk","UA"),"%02d.%02d — %s",person.day,person.month,person.name));
+      }
+      for(Person person:sorted)if(person.month==month&&person.day==day){
+        titles.add("ІМЕНИННИКИ ДНЯ");entries.add(person.name);
+      }
     }
-    holidayLabel.setText(enabled("holidays")&&enabled("birthdays")?"СВЯТА ТА ІМЕНИННИКИ":enabled("birthdays")?"ІМЕНИННИКИ МІСЯЦЯ":"СЬОГОДНІ ВІДЗНАЧАЮТЬ");
-    holidayLabel.setVisibility(topItems.isEmpty()?View.GONE:View.VISIBLE);
-    holidaySwitcher.setVisibility(topItems.isEmpty()?View.GONE:View.VISIBLE);
-    if(!topItems.isEmpty()){holidayIndex%=topItems.size();holidaySwitcher.setText(topItems.get(holidayIndex));holidayIndex++;}
+    if(entries.isEmpty()){
+      currentTopSignature="";topCursor=0;
+      holidayLabel.setVisibility(View.GONE);holidaySwitcher.setVisibility(View.GONE);return;
+    }
+    holidayLabel.setVisibility(View.VISIBLE);holidaySwitcher.setVisibility(View.VISIBLE);
+    String signature=TextUtils.join("\u001f",titles)+"\u001e"+TextUtils.join("\u001f",entries);
+    if(!signature.equals(currentTopSignature)){currentTopSignature=signature;topCursor=0;}
+    if(topCursor>=entries.size())topCursor=0;
+    String title=titles.get(topCursor),entry=entries.get(topCursor);
+    TextView visibleTitle=(TextView)holidayLabel.getCurrentView();
+    if(visibleTitle==null||!title.contentEquals(visibleTitle.getText()))holidayLabel.setText(title);
+    holidaySwitcher.setText(entry);
+    topCursor=(topCursor+1)%entries.size();
   }
   private void updateVisibility(){
     if(bottomPanel!=null)bottomPanel.setVisibility(!siteOpen&&anyTicker()?View.VISIBLE:View.GONE);
-    updateTopRotation();
+    // Keep the current top item until its scheduled rotation.
     if(tickerViewport!=null){handler.removeCallbacks(tickerFrame);tickerText.clearAnimation();tickerRunning=false;currentCategory="";categoryIndex=0;if(anyTicker())tickerViewport.post(this::startTicker);}
   }
   private static class FitVideoView extends VideoView{
@@ -463,6 +489,18 @@ public class MainActivity extends Activity {
       .setMultiChoiceItems(labels,values,(d,i,checked)->{getPreferences(0).edit().putBoolean(keys[i],checked).apply();updateVisibility();})
       .setPositiveButton("Готово",(d,w)->updateVisibility()).show();
   }
+  private void topIntervalSettings(){
+    final int[] values={5,10,15,20,25,30};
+    String[] labels=new String[values.length];int selected=3;
+    for(int i=0;i<values.length;i++){labels[i]=values[i]+" секунд";if(values[i]==topIntervalSeconds())selected=i;}
+    new AlertDialog.Builder(this).setTitle("Час зміни верхньої панелі")
+      .setSingleChoiceItems(labels,selected,(dialog,which)->{
+        getPreferences(0).edit().putInt("top_interval_seconds",values[which]).apply();
+        handler.removeCallbacks(rotateHoliday);
+        handler.postDelayed(rotateHoliday,values[which]*1000L);
+        dialog.dismiss();
+      }).setNegativeButton("Скасувати",null).show();
+  }
   private void chooseFolder(){Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
     i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
     startActivityForResult(i,PICK_FOLDER);}
@@ -470,7 +508,7 @@ public class MainActivity extends Activity {
     boolean sound=getPreferences(0).getBoolean("sound",false),stretch=getPreferences(0).getBoolean("stretch_video",false);
     String[] opts={"Вибрати папку Movies/ForestKiosk","Час бездіяльності",
       "Звук відео: "+(sound?"увімкнений":"вимкнений"),"Оновити список відео",
-      "Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),"Оновити свята та новини", "Вибрати папку з Excel і листівками", "Відображення елементів", "Перечитати Excel", "Розклад привітань і мелодія"};
+      "Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),"Оновити свята та новини", "Вибрати папку з Excel і листівками", "Відображення елементів", "Перечитати Excel", "Розклад привітань і мелодія", "Час зміни верхньої панелі"};
     new AlertDialog.Builder(this).setTitle("Налаштування MalinForest").setItems(opts,(d,w)->{
       if(w==0)chooseFolder();
       if(w==1){String[] times={"30 секунд","1 хвилина","2 хвилини","5 хвилин"};int[] values={30000,60000,120000,300000};
@@ -487,7 +525,7 @@ public class MainActivity extends Activity {
         getPreferences(0).edit().putBoolean("stretch_video",enabled).apply();video.setStretchMode(enabled);
         Toast.makeText(this,enabled?"Розтягування увімкнено":"Збереження пропорцій увімкнено",Toast.LENGTH_SHORT).show();}
       if(w==5){loadHolidays();loadNews();Toast.makeText(this,"Оновлюємо дані…",Toast.LENGTH_SHORT).show();}
-      if(w==6)chooseDataFolder();if(w==7)displaySettings();if(w==8)loadData();if(w==9)birthdaySettings();
+      if(w==6)chooseDataFolder();if(w==7)displaySettings();if(w==8)loadData();if(w==9)birthdaySettings();if(w==10)topIntervalSettings();
     }).show();
   }
   @Override protected void onActivityResult(int request,int result,Intent data){
