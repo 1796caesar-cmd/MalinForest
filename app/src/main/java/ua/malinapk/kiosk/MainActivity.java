@@ -44,7 +44,15 @@ public class MainActivity extends Activity {
   private final Handler handler=new Handler(Looper.getMainLooper());
   private final ArrayList<Uri> playlist=new ArrayList<>();
   private final ArrayList<String> holidays=new ArrayList<>();
-  private FrameLayout root, content, videoLayer, bottomPanel, tickerViewport;
+  private FrameLayout root, content, videoLayer, bottomPanel, tickerViewport, gameOverlay;
+  private LinearLayout topPanel;
+  private TextView gamesButton, gameTimerLabel;
+  private int gameMode=-1, gameLives=3, gameIndex=0;
+  private long gameLastTouch=0;
+  private boolean gameFinished=false, gameBusy=false;
+  private final ArrayList<String> gameQueue=new ArrayList<>(), remainingTrees=new ArrayList<>();
+  private final Random gameRandom=new Random();
+  private final Runnable gameIdle=new Runnable(){@Override public void run(){if(gameOverlay==null)return;long left=gameTimeoutMs()-(System.currentTimeMillis()-gameLastTouch);if(left<=0){closeGames();return;}if(gameTimerLabel!=null)gameTimerLabel.setText("◷ "+String.format(Locale.US,"%02d:%02d",(left+999)/1000/60,(left+999)/1000%60));handler.postDelayed(this,500);}};
   private FitVideoView video;
   private WebView web;
   private TextView prompt, clock, date, weather, forecast, empty, tickerText;
@@ -95,7 +103,7 @@ public class MainActivity extends Activity {
     updateTopRotation();
     handler.postDelayed(this,topIntervalSeconds()*1000L);
   }};
-  private int topIntervalSeconds(){int n=getPreferences(0).getInt("top_interval_seconds",20);return n>=5&&n<=30&&n%5==0?n:20;}
+  private int topIntervalSeconds(){int n=getPreferences(0).getInt("top_interval_seconds",10);return n>=5&&n<=30&&n%5==0?n:10;}
   private int dp(float v){return (int)(v*getResources().getDisplayMetrics().density+.5f);}
   private GradientDrawable bg(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
   private TextView label(String s,int sp,boolean bold){TextView t=new TextView(this);t.setText(s);t.setTextColor(Color.WHITE);t.setTextSize(sp);if(bold)t.setTypeface(null,Typeface.BOLD);return t;}
@@ -105,7 +113,7 @@ public class MainActivity extends Activity {
     super.onCreate(state);
     getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     immersive();
-    timeout=getPreferences(0).getInt("timeout",120000);
+    timeout=getPreferences(0).getInt("timeout",30000);
     root=new FrameLayout(this);root.setBackgroundColor(Color.BLACK);setContentView(root);
     content=new FrameLayout(this);root.addView(content,new FrameLayout.LayoutParams(-1,-1));
 
@@ -131,7 +139,7 @@ public class MainActivity extends Activity {
     videoLayer=new FrameLayout(this);videoLayer.setBackgroundColor(0xFF101A14);
     content.addView(videoLayer,new FrameLayout.LayoutParams(-1,-1));
     video=new FitVideoView(this);
-    video.setStretchMode(getPreferences(0).getBoolean("stretch_video",false));
+    video.setStretchMode(getPreferences(0).getBoolean("stretch_video",true));
     videoLayer.addView(video,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
     empty=label("",19,false);empty.setGravity(Gravity.CENTER);
     empty.setPadding(dp(20),dp(20),dp(20),dp(20));
@@ -218,13 +226,17 @@ public class MainActivity extends Activity {
     forecast=label("",13,false);forecast.setTextColor(0xFFBED7C7);
     forecast.setGravity(Gravity.RIGHT);forecast.setMaxLines(2);weatherBox.addView(forecast);
     top.setOnLongClickListener(v->{settings();return true;});
-    root.addView(top,new FrameLayout.LayoutParams(-1,dp(86),Gravity.TOP));
+    topPanel=top;root.addView(top,new FrameLayout.LayoutParams(-1,dp(86),Gravity.TOP));
 
     video.setOnCompletionListener(mp->playNext());
     video.setOnErrorListener((mp,what,extra)->{handler.postDelayed(this::playNext,500);return true;});
     videoLayer.setOnClickListener(v->showSite());video.setOnClickListener(v->showSite());
     prompt.setOnClickListener(v->showSite());empty.setOnClickListener(v->showSite());
     prompt.setOnLongClickListener(v->{settings();return true;});
+    gamesButton=label("🎮 ІНТЕРАКТИВНІ ІГРИ",17,true);gamesButton.setGravity(Gravity.CENTER);
+    gamesButton.setPadding(dp(16),dp(12),dp(16),dp(12));gamesButton.setBackground(bg(0xEE226A3B,14));
+    FrameLayout.LayoutParams gb=new FrameLayout.LayoutParams(-2,-2,Gravity.RIGHT|Gravity.BOTTOM);gb.setMargins(0,0,dp(16),dp(65));
+    content.addView(gamesButton,gb);gamesButton.setOnClickListener(v->openGameMenu());
     String saved=getPreferences(0).getString("folder",null);
     if(saved!=null){folder=Uri.parse(saved);loadFolder(folder,true);}
     if(playlist.isEmpty())showEmpty();else playCurrent();
@@ -421,6 +433,7 @@ public class MainActivity extends Activity {
   }
   private void updateVisibility(){
     if(bottomPanel!=null)bottomPanel.setVisibility(!siteOpen&&anyTicker()?View.VISIBLE:View.GONE);
+    if(gamesButton!=null)gamesButton.setVisibility(!siteOpen&&enabled("games")?View.VISIBLE:View.GONE);
     // Keep the current top item until its scheduled rotation.
     if(tickerViewport!=null){handler.removeCallbacks(tickerFrame);tickerText.clearAnimation();tickerRunning=false;currentCategory="";categoryIndex=0;if(anyTicker())tickerViewport.post(this::startTicker);}
   }
@@ -460,9 +473,9 @@ public class MainActivity extends Activity {
   private void showSite(){
     if(siteOpen||birthdayShowing)return;siteOpen=true;lastPosition=video.getCurrentPosition();
     if(video.isPlaying())video.pause();videoLayer.setVisibility(View.GONE);
-    bottomPanel.setVisibility(View.GONE);web.setVisibility(View.VISIBLE);
+    bottomPanel.setVisibility(View.GONE);if(gamesButton!=null)gamesButton.setVisibility(View.GONE);web.setVisibility(View.VISIBLE);
     // Верхня панель у режимі сайту непрозора.
-    LinearLayout top=(LinearLayout)root.getChildAt(root.getChildCount()-1);
+    LinearLayout top=topPanel;
     top.setBackgroundColor(0xFF142A20);
     if(web.getUrl()==null||"about:blank".equals(web.getUrl()))web.loadUrl(SITE);
     lastTouch=System.currentTimeMillis();scheduleIdle();
@@ -470,8 +483,8 @@ public class MainActivity extends Activity {
   private void showVideo(){
     if(!siteOpen)return;siteOpen=false;handler.removeCallbacks(idle);
     web.onPause();web.setVisibility(View.GONE);videoLayer.setVisibility(View.VISIBLE);
-    bottomPanel.setVisibility(anyTicker()?View.VISIBLE:View.GONE);
-    LinearLayout top=(LinearLayout)root.getChildAt(root.getChildCount()-1);
+    bottomPanel.setVisibility(anyTicker()?View.VISIBLE:View.GONE);if(gamesButton!=null)gamesButton.setVisibility(enabled("games")?View.VISIBLE:View.GONE);
+    LinearLayout top=topPanel;
     top.setBackgroundColor(0x99142A20);
     web.loadUrl("about:blank");web.onResume();
     if(playlist.isEmpty())showEmpty();else if(lastPosition>0){video.seekTo(lastPosition);video.start();}else playCurrent();
@@ -479,13 +492,14 @@ public class MainActivity extends Activity {
   private void scheduleIdle(){handler.removeCallbacks(idle);handler.postDelayed(idle,timeout);}
   @Override public boolean dispatchTouchEvent(android.view.MotionEvent e){
     if(siteOpen&&e.getAction()==MotionEvent.ACTION_DOWN){lastTouch=System.currentTimeMillis();scheduleIdle();}
+    if(gameOverlay!=null&&e.getAction()==MotionEvent.ACTION_DOWN)gameLastTouch=System.currentTimeMillis();
     return super.dispatchTouchEvent(e);
   }
   private void chooseDataFolder(){Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
     i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
     startActivityForResult(i,PICK_DATA);}
   private void displaySettings(){
-    String[] labels={"Кнопка ігор (поки без гри)","Іменинники", "Свята", "Онлайн-новини", "Факти з Excel"};
+    String[] labels={"Кнопка інтерактивних ігор","Іменинники", "Свята", "Онлайн-новини", "Факти з Excel"};
     String[] keys={"games","birthdays","holidays","news","facts"};
     boolean[] values=new boolean[keys.length];for(int i=0;i<keys.length;i++)values[i]=enabled(keys[i]);
     new AlertDialog.Builder(this).setTitle("Відображення елементів")
@@ -507,28 +521,45 @@ public class MainActivity extends Activity {
   private void chooseFolder(){Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
     i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
     startActivityForResult(i,PICK_FOLDER);}
+  private int gameTimeoutMs(){return getPreferences(0).getInt("game_timeout",60000);}
+  private void gameTimeoutSettings(){
+    final int[] values={60000,120000,300000};
+    String[] labels={"1 хвилина","2 хвилини","5 хвилин"};
+    int selected=0;for(int i=0;i<values.length;i++)if(values[i]==gameTimeoutMs())selected=i;
+    new AlertDialog.Builder(this).setTitle("Таймер бездіяльності у грі")
+      .setSingleChoiceItems(labels,selected,(d,w)->{getPreferences(0).edit().putInt("game_timeout",values[w]).apply();d.dismiss();})
+      .setNegativeButton("Скасувати",null).show();
+  }
+  private void mainIdleSettings(){
+    String[] labels={"30 секунд","1 хвилина","2 хвилини","5 хвилин"};
+    int[] values={30000,60000,120000,300000};int selected=0;
+    for(int i=0;i<values.length;i++)if(values[i]==timeout)selected=i;
+    new AlertDialog.Builder(this).setTitle("Час бездіяльності")
+      .setSingleChoiceItems(labels,selected,(d,w)->{timeout=values[w];getPreferences(0).edit().putInt("timeout",timeout).apply();d.dismiss();})
+      .setNegativeButton("Скасувати",null).show();
+  }
   private void settings(){
-    boolean sound=getPreferences(0).getBoolean("sound",false),stretch=getPreferences(0).getBoolean("stretch_video",false);
-    String[] opts={"Вибрати папку Movies/ForestKiosk","Час бездіяльності",
+    boolean sound=getPreferences(0).getBoolean("sound",false),stretch=getPreferences(0).getBoolean("stretch_video",true);
+    String[] opts={"Вибрати папку з відео","Вибрати папку з файлами (MalinForest)","Відображення елементів",
+      "Розклад привітань і мелодія","Час бездіяльності","Таймер бездіяльності у грі",
+      "Час зміни верхньої панелі","Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),
       "Звук відео: "+(sound?"увімкнений":"вимкнений"),"Оновити список відео",
-      "Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),"Оновити свята та новини", "Вибрати папку з Excel і листівками", "Відображення елементів", "Перечитати Excel", "Розклад привітань і мелодія", "Час зміни верхньої панелі"};
+      "Оновити свята та новини","Перечитати Excel"};
     new AlertDialog.Builder(this).setTitle("Налаштування MalinForest").setItems(opts,(d,w)->{
       if(w==0)chooseFolder();
-      if(w==1){String[] times={"30 секунд","1 хвилина","2 хвилини","5 хвилин"};int[] values={30000,60000,120000,300000};
-        int selected=2;for(int i=0;i<values.length;i++)if(values[i]==timeout)selected=i;
-        new AlertDialog.Builder(this).setTitle("Повернення до відео")
-          .setSingleChoiceItems(times,selected,(dialog,which)->{
-            timeout=values[which];getPreferences(0).edit().putInt("timeout",timeout).apply();dialog.dismiss();
-          }).setNegativeButton("Скасувати",null).show();}
-      if(w==2){boolean on=!getPreferences(0).getBoolean("sound",false);
-        getPreferences(0).edit().putBoolean("sound",on).apply();
-        Toast.makeText(this,"Звук "+(on?"увімкнено":"вимкнено")+" (із наступного відео)",Toast.LENGTH_LONG).show();}
-      if(w==3&&folder!=null)loadFolder(folder,true);
-      if(w==4){boolean enabled=!getPreferences(0).getBoolean("stretch_video",false);
-        getPreferences(0).edit().putBoolean("stretch_video",enabled).apply();video.setStretchMode(enabled);
-        Toast.makeText(this,enabled?"Розтягування увімкнено":"Збереження пропорцій увімкнено",Toast.LENGTH_SHORT).show();}
-      if(w==5){loadHolidays();loadNews();Toast.makeText(this,"Оновлюємо дані…",Toast.LENGTH_SHORT).show();}
-      if(w==6)chooseDataFolder();if(w==7)displaySettings();if(w==8)loadData();if(w==9)birthdaySettings();if(w==10)topIntervalSettings();
+      if(w==1)chooseDataFolder();
+      if(w==2)displaySettings();
+      if(w==3)birthdaySettings();
+      if(w==4)mainIdleSettings();
+      if(w==5)gameTimeoutSettings();
+      if(w==6)topIntervalSettings();
+      if(w==7){boolean enabled=!getPreferences(0).getBoolean("stretch_video",true);
+        getPreferences(0).edit().putBoolean("stretch_video",enabled).apply();video.setStretchMode(enabled);}
+      if(w==8){boolean on=!getPreferences(0).getBoolean("sound",false);
+        getPreferences(0).edit().putBoolean("sound",on).apply();}
+      if(w==9&&folder!=null)loadFolder(folder,true);
+      if(w==10){loadHolidays();loadNews();}
+      if(w==11)loadData();
     }).show();
   }
   @Override protected void onActivityResult(int request,int result,Intent data){
@@ -820,12 +851,203 @@ public class MainActivity extends Activity {
   }).start();}
   private String degrees(double v){return (v>0?"+":"")+Math.round(v);}
   private String symbol(int code){if(code==0)return "☀";if(code<=3)return "⛅";if(code<=48)return "☁";if(code<=67)return "🌧";if(code<=77)return "❄";return "🌦";}
-  @Override public void onBackPressed(){if(siteOpen){if(web.canGoBack()&&!"about:blank".equals(web.getUrl()))web.goBack();else showVideo();}else settings();}
+  @Override public void onBackPressed(){if(gameOverlay!=null){closeGames();return;}if(siteOpen){if(web.canGoBack()&&!"about:blank".equals(web.getUrl()))web.goBack();else showVideo();}else settings();}
   @Override protected void onResume(){super.onResume();immersive();
     if(!siteOpen&&video!=null&&!playlist.isEmpty()&&!video.isPlaying())video.start();}
   @Override protected void onPause(){if(video!=null&&video.isPlaying())video.pause();super.onPause();}
   @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);
-    handler.removeCallbacks(tickerFrame);if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();stopBirthdayMusic();super.onDestroy();}
+    handler.removeCallbacks(gameIdle);handler.removeCallbacks(tickerFrame);if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();stopBirthdayMusic();super.onDestroy();}
+  // Ігри читають картинки з уже вибраної папки MalinForest через SAF.
+  private Uri gameFile(String... parts){
+    if(dataFolder==null)return null;
+    try{
+      String parent=DocumentsContract.getTreeDocumentId(dataFolder);
+      for(String part:parts){
+        Uri list=DocumentsContract.buildChildDocumentsUriUsingTree(dataFolder,parent);
+        String found=null;
+        try(Cursor c=getContentResolver().query(list,new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null)){
+          if(c!=null)while(c.moveToNext())if(part.equalsIgnoreCase(c.getString(1))){found=c.getString(0);break;}
+        }
+        if(found==null)return null;
+        parent=found;
+      }
+      return DocumentsContract.buildDocumentUriUsingTree(dataFolder,parent);
+    }catch(Exception ignored){return null;}
+  }
+  private ImageView gameImage(String... path){
+    ImageView iv=new ImageView(this);iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+    Uri uri=gameFile(path);
+    if(uri!=null){try(InputStream in=getContentResolver().openInputStream(uri)){
+      if(in!=null)iv.setImageBitmap(BitmapFactory.decodeStream(in));
+    }catch(Exception ignored){}}
+    return iv;
+  }
+  private final String[] treeNames={"дуб","клен","сосна","ялина","каштан","береза","вільха","туя","ялівець"};
+  private final String[] treeLabels={"Дуб звичайний","Клен звичайний","Сосна звичайна","Ялина звичайна","Каштан звичайний","Береза повисла","Вільха чорна","Туя західна","Ялівець звичайний"};
+  private final String[] animalNames={"вовк","лисиця","лось","олень","косуля","глухар","яструб","курка","собака","кіт","корова","свиня","коза","індик"};
+  private final String[] mushroomNames={"маслюк","білий гриб","лисичка","сироїжки","підберезовик","печериці","бліда поганка","мухомор червоний","мухомор зелений","несправжній опеньок","павутинник","печериця темно-луската"};
+  private boolean gameCorrect(String item){
+    if(gameMode==0)return true;
+    String[] names=gameMode==1?animalNames:mushroomNames;
+    int i=Arrays.asList(names).indexOf(item);
+    return i>=0&&i<(gameMode==1?7:6);
+  }
+  private TextView gameText(String text,int size,int color){
+    TextView v=label(text,size,true);v.setTextColor(color);v.setGravity(Gravity.CENTER);
+    v.setShadowLayer(3,1,2,Color.BLACK);return v;
+  }
+  private TextView gameButton(String text,int color){
+    TextView v=gameText(text,21,Color.WHITE);v.setPadding(dp(16),dp(12),dp(16),dp(12));v.setBackground(bg(color,16));return v;
+  }
+  private void gameResetIdle(){gameLastTouch=System.currentTimeMillis();handler.removeCallbacks(gameIdle);handler.post(gameIdle);}
+  private void gameShell(){
+    if(gameOverlay!=null)root.removeView(gameOverlay);
+    gameOverlay=new FrameLayout(this);root.addView(gameOverlay,new FrameLayout.LayoutParams(-1,-1));
+    gameOverlay.setBackgroundColor(0xFF21452B);
+    ImageView bg=gameImage("Games","background.png");bg.setScaleType(ImageView.ScaleType.CENTER_CROP);
+    gameOverlay.addView(bg,new FrameLayout.LayoutParams(-1,-1));
+    if(topPanel!=null)topPanel.setVisibility(View.GONE);
+    gameTimerLabel=gameText("◷ 01:00",20,Color.WHITE);gameTimerLabel.setBackground(bg(0xD0205637,12));
+    FrameLayout.LayoutParams tp=new FrameLayout.LayoutParams(dp(115),dp(48),Gravity.LEFT|Gravity.TOP);
+    tp.setMargins(dp(12),dp(12),0,0);gameOverlay.addView(gameTimerLabel,tp);
+    gameResetIdle();
+  }
+  private void closeGames(){
+    handler.removeCallbacks(gameIdle);
+    if(gameOverlay!=null){root.removeView(gameOverlay);gameOverlay=null;}
+    gameMode=-1;gameTimerLabel=null;gameFinished=false;gameBusy=false;
+    if(topPanel!=null)topPanel.setVisibility(View.VISIBLE);
+    if(!siteOpen&&!birthdayShowing&&video!=null&&!playlist.isEmpty())video.start();
+  }
+  private void gameExitButton(){
+    TextView exit=gameButton("Завершити гру",0xDDAC2929);
+    FrameLayout.LayoutParams ep=new FrameLayout.LayoutParams(-2,dp(52),Gravity.RIGHT|Gravity.BOTTOM);
+    ep.setMargins(0,0,dp(14),dp(12));gameOverlay.addView(exit,ep);
+    exit.setOnClickListener(v->closeGames());
+  }
+  private void openGameMenu(){
+    if(siteOpen||birthdayShowing||dataFolder==null){
+      if(dataFolder==null)Toast.makeText(this,"Спочатку виберіть папку MalinForest у налаштуваннях",Toast.LENGTH_LONG).show();
+      return;
+    }
+    if(video!=null&&video.isPlaying())video.pause();
+    gameMode=-1;gameShell();
+    TextView title=gameText("ІНТЕРАКТИВНІ ІГРИ",32,Color.WHITE);
+    FrameLayout.LayoutParams ttl=new FrameLayout.LayoutParams(-1,dp(65),Gravity.TOP);
+    ttl.topMargin=dp(70);gameOverlay.addView(title,ttl);
+    LinearLayout cards=new LinearLayout(this);cards.setGravity(Gravity.CENTER);cards.setPadding(dp(20),dp(8),dp(20),dp(8));
+    FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,-1);cp.topMargin=dp(145);cp.bottomMargin=dp(90);
+    gameOverlay.addView(cards,cp);
+    String[] names={"Де я росту?","Де я живу?","Їстівний чи неїстівний?"};
+    String[][] images={{"Games","DeYaRostu","Дерева","дуб.jpg"},{"Games","DeYaZhyvu","Тварини","лисиця.jpg"},{"Games","Gruby","Гриби","білий гриб.jpg"}};
+    for(int i=0;i<3;i++){
+      final int mode=i;
+      LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(8),dp(8),dp(8),dp(8));
+      card.setBackground(bg(0xEAE5F3DC,18));
+      LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.setMargins(dp(8),0,dp(8),0);cards.addView(card,p);
+      ImageView image=gameImage(images[i]);card.addView(image,new LinearLayout.LayoutParams(-1,0,1));
+      TextView text=gameText(names[i],22,0xFF173F28);text.setShadowLayer(0,0,0,0);
+      card.addView(text,new LinearLayout.LayoutParams(-1,dp(66)));
+      card.setOnClickListener(v->startGame(mode));
+    }
+    gameExitButton();
+  }
+  private void startGame(int mode){
+    gameMode=mode;gameLives=3;gameIndex=0;gameFinished=false;gameBusy=false;
+    gameQueue.clear();remainingTrees.clear();
+    if(mode==0){gameQueue.addAll(Arrays.asList(treeNames));remainingTrees.addAll(Arrays.asList(treeNames));Collections.shuffle(remainingTrees,gameRandom);}
+    else if(mode==1)gameQueue.addAll(Arrays.asList(animalNames));
+    else gameQueue.addAll(Arrays.asList(mushroomNames));
+    Collections.shuffle(gameQueue,gameRandom);
+    showGameRound();
+  }
+  private void showGameRound(){
+    if(gameMode<0)return;
+    if(gameIndex>=gameQueue.size()||gameLives<=0){showGameEnd();return;}
+    gameBusy=false;gameShell();
+    String[] names={"Де я росту?","Де я живу?","Їстівний чи неїстівний?"};
+    TextView title=gameText(names[gameMode],30,Color.WHITE);
+    FrameLayout.LayoutParams tp=new FrameLayout.LayoutParams(-1,dp(50),Gravity.TOP);tp.topMargin=dp(14);tp.leftMargin=dp(125);tp.rightMargin=dp(145);
+    gameOverlay.addView(title,tp);
+    StringBuilder heartsText=new StringBuilder();for(int k=0;k<gameLives;k++)heartsText.append("❤ ");for(int k=gameLives;k<3;k++)heartsText.append("♡ ");
+    TextView hearts=gameText(heartsText.toString(),27,0xFFFF4444);
+    FrameLayout.LayoutParams hp=new FrameLayout.LayoutParams(dp(150),dp(50),Gravity.RIGHT|Gravity.TOP);hp.topMargin=dp(10);gameOverlay.addView(hearts,hp);
+    String item=gameQueue.get(gameIndex);
+    LinearLayout question=new LinearLayout(this);question.setOrientation(LinearLayout.VERTICAL);question.setGravity(Gravity.CENTER);
+    FrameLayout.LayoutParams qp=new FrameLayout.LayoutParams(-1,-1);qp.topMargin=dp(72);qp.bottomMargin=dp(gameMode==0?165:125);
+    gameOverlay.addView(question,qp);
+    ImageView photo=gameMode==0?gameImage("Games","DeYaRostu","Плоди",item+".jpg"):
+      gameMode==1?gameImage("Games","DeYaZhyvu","Тварини",item+".jpg"):
+      gameImage("Games","Gruby","Гриби",item+".jpg");
+    photo.setBackground(bg(0xCFFFFFFF,14));
+    question.addView(photo,new LinearLayout.LayoutParams(-1,0,1));
+    if(gameMode!=0){TextView caption=gameText(item.substring(0,1).toUpperCase(new Locale("uk"))+item.substring(1),24,Color.WHITE);
+      question.addView(caption,new LinearLayout.LayoutParams(-1,dp(46)));}
+    photo.setTranslationY(-dp(110));photo.setAlpha(0f);photo.animate().translationY(0).alpha(1).setDuration(550).start();
+    TextView feedback=gameText("",25,Color.WHITE);
+    FrameLayout.LayoutParams fp=new FrameLayout.LayoutParams(-1,dp(52),Gravity.BOTTOM);fp.bottomMargin=dp(gameMode==0?122:85);
+    gameOverlay.addView(feedback,fp);
+    if(gameMode==0){
+      HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.setHorizontalScrollBarEnabled(false);
+      FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(-1,dp(122),Gravity.BOTTOM);sp.bottomMargin=dp(12);sp.leftMargin=dp(8);sp.rightMargin=dp(165);
+      gameOverlay.addView(scroll,sp);
+      LinearLayout row=new LinearLayout(this);scroll.addView(row);
+      int width=Math.max(dp(96),(getResources().getDisplayMetrics().widthPixels-dp(190))/Math.max(1,remainingTrees.size()));
+      for(String tree:remainingTrees){
+        LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setBackground(bg(0xDDEAF1DE,10));
+        LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(width,dp(118));bp.setMargins(dp(3),0,dp(3),0);row.addView(card,bp);
+        ImageView img=gameImage("Games","DeYaRostu","Дерева",tree+".jpg");card.addView(img,new LinearLayout.LayoutParams(-1,0,1));
+        int idx=Arrays.asList(treeNames).indexOf(tree);
+        TextView lbl=gameText(idx>=0?treeLabels[idx]:tree,11,0xFF173D29);lbl.setShadowLayer(0,0,0,0);
+        card.addView(lbl,new LinearLayout.LayoutParams(-1,dp(36)));
+        card.setOnClickListener(v->gameAnswer(tree.equals(item),tree,feedback));
+      }
+    }else{
+      LinearLayout choices=new LinearLayout(this);choices.setGravity(Gravity.CENTER);
+      FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,dp(75),Gravity.BOTTOM);bp.bottomMargin=dp(12);bp.rightMargin=dp(165);bp.leftMargin=dp(20);
+      gameOverlay.addView(choices,bp);
+      String[] labels=gameMode==1?new String[]{"🌲 ДИКИЙ","🏡 СВІЙСЬКИЙ"}:new String[]{"ЇСТІВНИЙ","НЕЇСТІВНИЙ"};
+      for(int i=0;i<2;i++){
+        final boolean pickedFirst=i==0;
+        TextView btn=gameButton(labels[i],i==0?0xE322733D:0xDDA74B30);
+        LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(0,dp(65),1);cp.setMargins(dp(8),0,dp(8),0);choices.addView(btn,cp);
+        btn.setOnClickListener(v->gameAnswer(pickedFirst==gameCorrect(item),item,feedback));
+      }
+    }
+    gameExitButton();
+  }
+  private void gameAnswer(boolean correct,String item,TextView feedback){
+    if(gameBusy||gameFinished)return;
+    gameBusy=true;
+    if(correct){
+      feedback.setText("Вірно! 🎉");feedback.setTextColor(0xFFB8FF92);
+      for(int i=0;i<15;i++){
+        TextView conf=gameText(i%2==0?"✦":"●",20,i%3==0?0xFFFFDA42:0xFF92F3FF);
+        FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(30),dp(30),Gravity.TOP|Gravity.LEFT);
+        int x=gameRandom.nextInt(Math.max(1,getResources().getDisplayMetrics().widthPixels-dp(30)));
+        p.leftMargin=x;p.topMargin=dp(80)+gameRandom.nextInt(dp(130));gameOverlay.addView(conf,p);
+        conf.animate().translationY(dp(170)+gameRandom.nextInt(dp(100))).rotation(gameRandom.nextInt(360)).alpha(0f).setDuration(1000).start();
+      }
+      if(gameMode==0)remainingTrees.remove(item);
+      gameIndex++;
+      handler.postDelayed(()->{if(gameOverlay!=null&&gameMode>=0)showGameRound();},1250);
+    }else{
+      gameLives--;feedback.setText("Невірно, спробуй ще раз");feedback.setTextColor(0xFFFFE7A8);
+      if(gameLives==0)handler.postDelayed(()->{if(gameOverlay!=null&&gameMode>=0)showGameEnd();},1200);
+      else handler.postDelayed(()->{if(gameOverlay!=null&&gameMode>=0)showGameRound();},950);
+    }
+  }
+  private void showGameEnd(){
+    gameFinished=true;gameShell();
+    TextView msg=gameText(gameLives==0?"Життя закінчилися!":"Молодець! Усі відповіді правильні!",30,Color.WHITE);
+    FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(-1,dp(95),Gravity.CENTER);gameOverlay.addView(msg,mp);
+    LinearLayout buttons=new LinearLayout(this);buttons.setGravity(Gravity.CENTER);
+    FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,dp(80),Gravity.BOTTOM);bp.bottomMargin=dp(65);gameOverlay.addView(buttons,bp);
+    TextView retry=gameButton("Спробувати ще раз",0xE327743B);
+    LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-2,dp(62));rp.setMargins(dp(10),0,dp(10),0);buttons.addView(retry,rp);
+    retry.setOnClickListener(v->startGame(gameMode));
+    gameExitButton();
+  }
   // Читаємо XLSX як стандартний ZIP/XML без сторонніх залежностей.
   private Uri dataFile(String name){
     if(dataFolder==null)return null;
