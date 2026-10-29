@@ -247,50 +247,79 @@ public class MainActivity extends Activity {
       lower.contains("package=com.google.android.youtube");
   }
 
-  // Кожне повідомлення прокручується окремо: так не губимо позицію категорії.
+  // Безперервна стрічка: наступний запис іде відразу після попереднього через ●.
+  // Прогрес фіксуємо лише після того, як повідомлення повністю залишило екран.
+  private final ArrayList<String> tickerParts=new ArrayList<>();
+  private ArrayList<String> tickerItems=new ArrayList<>();
+  private String tickerCategory="";
+  private boolean tickerIsFact=false;
+  private int tickerNextPosition=0;
+  private float tickerX=0f;
+  private long tickerLastFrame=0L;
+  private static final String TICKER_SEPARATOR="     ●     ";
+  private final Runnable tickerFrame=new Runnable(){@Override public void run(){
+    if(!tickerRunning||tickerText==null||tickerViewport==null)return;
+    long now=android.os.SystemClock.uptimeMillis();
+    float elapsed=Math.min(0.1f,Math.max(0f,(now-tickerLastFrame)/1000f));tickerLastFrame=now;
+    tickerX-=dp(85)*elapsed;
+    if(!tickerParts.isEmpty()){
+      String first=tickerParts.get(0)+TICKER_SEPARATOR;
+      float firstWidth=tickerText.getPaint().measureText(first);
+      if(tickerX+firstWidth<=0){
+        tickerX+=firstWidth;
+        tickerParts.remove(0);
+        int completed=tickerNextPosition-tickerParts.size();
+        int next=((completed%tickerItems.size())+tickerItems.size())%tickerItems.size();
+        factPositions.put(tickerCategory,next);
+        getPreferences(0).edit().putInt("ticker_pos_"+tickerCategory,next).apply();
+        if(tickerIsFact&&next==0)shuffleFactOrder(tickerCategory,tickerItems);
+        if(now-categoryStarted>=300000||next==0){
+          tickerRunning=false;nextCategory();return;
+        }
+        addTickerPart();
+        updateTickerStrip();
+      }
+    }
+    tickerText.setTranslationX(tickerX);
+    handler.postDelayed(this,16);
+  }};
+  private void addTickerPart(){
+    if(tickerItems.isEmpty())return;
+    int pos=tickerNextPosition%tickerItems.size();
+    int idx=tickerIsFact?factOrder(tickerCategory,tickerItems).get(pos):pos;
+    tickerParts.add(tickerItems.get(idx));tickerNextPosition++;
+  }
+  private void updateTickerStrip(){
+    StringBuilder b=new StringBuilder();
+    for(String part:tickerParts)b.append(part).append(TICKER_SEPARATOR);
+    String message=b.toString();tickerText.setText(message);
+    int width=(int)Math.ceil(tickerText.getPaint().measureText(message))+dp(16);
+    FrameLayout.LayoutParams lp=(FrameLayout.LayoutParams)tickerText.getLayoutParams();
+    lp.width=Math.max(1,width);tickerText.setLayoutParams(lp);
+  }
   private void startTicker(){
-    if(tickerViewport==null||tickerText==null||!anyTicker())return;
-    tickerText.clearAnimation();tickerRunning=false;
+    if(tickerViewport==null||tickerText==null)return;
+    handler.removeCallbacks(tickerFrame);tickerText.clearAnimation();tickerRunning=false;
+    tickerText.setTranslationX(0);
+    if(!anyTicker())return;
     if(tickerViewport.getWidth()<=0){tickerViewport.postDelayed(this::startTicker,250);return;}
     rebuildCategories();
     if(activeCategories.isEmpty()){tickerText.setText("Немає повідомлень");return;}
     if(categoryIndex>=activeCategories.size())categoryIndex=0;
     String category=activeCategories.get(categoryIndex);
-    if(!category.equals(currentCategory)){currentCategory=category;categoryStarted=System.currentTimeMillis();}
+    if(!category.equals(currentCategory)){currentCategory=category;categoryStarted=android.os.SystemClock.uptimeMillis();}
     ArrayList<String> items=category.equals("Лісові новини")?newsItems():facts.get(category);
     if(items==null||items.isEmpty()){nextCategory();return;}
-    int position=factPositions.containsKey(category)?factPositions.get(category):0;
-    position%=items.size();
-    final int shownPosition=position;
-    final boolean isFact=!category.equals("Лісові новини");
-    final int itemIndex=isFact?factOrder(category,items).get(shownPosition):shownPosition;
-    String message=items.get(itemIndex);
+    tickerCategory=category;tickerItems=new ArrayList<>(items);
+    tickerIsFact=!category.equals("Лісові новини");
+    tickerNextPosition=((factPositions.containsKey(category)?factPositions.get(category):0)%items.size()+items.size())%items.size();
+    tickerParts.clear();
+    if(tickerIsFact)factOrder(category,tickerItems);
+    for(int i=0;i<Math.min(4,items.size());i++)addTickerPart();
     newsBadge.setText(category.toUpperCase(new Locale("uk","UA")));
-    tickerText.setText(message);
-    int w=(int)Math.ceil(tickerText.getPaint().measureText(message))+dp(20);
-    FrameLayout.LayoutParams lp=(FrameLayout.LayoutParams)tickerText.getLayoutParams();lp.width=w;tickerText.setLayoutParams(lp);
-    TranslateAnimation a=new TranslateAnimation(tickerViewport.getWidth(),-w,0,0);
-    a.setDuration(Math.max(2500,(long)((tickerViewport.getWidth()+w)*1000.0/dp(85))));
-    a.setInterpolator(new LinearInterpolator());
-    a.setAnimationListener(new Animation.AnimationListener(){
-      public void onAnimationStart(Animation x){}
-      public void onAnimationRepeat(Animation x){}
-      public void onAnimationEnd(Animation x){
-        if(!tickerRunning)return;
-        tickerRunning=false;
-        int next=(shownPosition+1)%items.size();
-        if(isFact&&next==0){
-          // Після показу всіх активних фактів починається нове випадкове коло.
-          shuffleFactOrder(category,items);
-        }
-        factPositions.put(category,next);
-        getPreferences(0).edit().putInt("ticker_pos_"+category,next).apply();
-        if(!anyTicker())return;
-        if(System.currentTimeMillis()-categoryStarted>=300000||next==0)nextCategory();
-        else tickerViewport.post(()->startTicker());
-      }
-    });
-    tickerRunning=true;tickerText.startAnimation(a);
+    updateTickerStrip();tickerX=tickerViewport.getWidth();tickerText.setTranslationX(tickerX);
+    tickerLastFrame=android.os.SystemClock.uptimeMillis();tickerRunning=true;
+    handler.post(tickerFrame);
   }
   // Для кожної категорії окрема випадкова перестановка без повторень.
   // Порядок та позиція зберігаються після закриття додатка.
@@ -364,7 +393,7 @@ public class MainActivity extends Activity {
   private void updateVisibility(){
     if(bottomPanel!=null)bottomPanel.setVisibility(!siteOpen&&anyTicker()?View.VISIBLE:View.GONE);
     updateTopRotation();
-    if(tickerViewport!=null){tickerText.clearAnimation();tickerRunning=false;currentCategory="";categoryIndex=0;if(anyTicker())tickerViewport.post(this::startTicker);}
+    if(tickerViewport!=null){handler.removeCallbacks(tickerFrame);tickerText.clearAnimation();tickerRunning=false;currentCategory="";categoryIndex=0;if(anyTicker())tickerViewport.post(this::startTicker);}
   }
   private static class FitVideoView extends VideoView{
     private int videoWidth=0,videoHeight=0;private boolean stretch=false;
@@ -755,7 +784,7 @@ public class MainActivity extends Activity {
     if(!siteOpen&&video!=null&&!playlist.isEmpty()&&!video.isPlaying())video.start();}
   @Override protected void onPause(){if(video!=null&&video.isPlaying())video.pause();super.onPause();}
   @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);
-    if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();stopBirthdayMusic();super.onDestroy();}
+    handler.removeCallbacks(tickerFrame);if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();stopBirthdayMusic();super.onDestroy();}
   // Читаємо XLSX як стандартний ZIP/XML без сторонніх залежностей.
   private Uri dataFile(String name){
     if(dataFolder==null)return null;
@@ -886,19 +915,35 @@ public class MainActivity extends Activity {
     Uri img=dataFile(jubilee?"jubilee.png":"birthday.png");
     if(img!=null){try{ImageView view=new ImageView(this);view.setImageURI(img);view.setScaleType(ImageView.ScaleType.FIT_CENTER);
       birthdayOverlay.addView(view,new FrameLayout.LayoutParams(-1,-1));}catch(Exception ignored){}}
-    // Координати у відсотках від картинки 1536x1024, з урахуванням FIT_CENTER.
-    birthdayOverlay.post(()->{
-      if(birthdayOverlay==null)return;int w=birthdayOverlay.getWidth(),h=birthdayOverlay.getHeight();
-      float scale=Math.min(w/1536f,h/1024f);float left=(w-1536*scale)/2f,top=(h-1024*scale)/2f;
-      TextView name=label(p.name,Math.max(16,(int)(42*scale/getResources().getDisplayMetrics().scaledDensity)),true);
-      name.setTextColor(0xFF51331B);name.setGravity(Gravity.CENTER);name.setMaxLines(2);
-      if(!jubilee)name.setBackgroundColor(0xFFFBE8C6);
-      name.setTextSize(p.name.length()>35?19:p.name.length()>25?25:33);
-      FrameLayout.LayoutParams np=new FrameLayout.LayoutParams((int)(850*scale),(int)(120*scale));
-      np.leftMargin=(int)(left+540*scale);np.topMargin=(int)(top+(jubilee?565:475)*scale);birthdayOverlay.addView(name,np);
-      if(jubilee){TextView ageView=label(age+" років",28,true);ageView.setTextColor(0xFF755020);ageView.setGravity(Gravity.CENTER);
-        FrameLayout.LayoutParams ap=new FrameLayout.LayoutParams((int)(750*scale),(int)(75*scale));ap.leftMargin=(int)(left+590*scale);ap.topMargin=(int)(top+690*scale);birthdayOverlay.addView(ageView,ap);}
-    });
+     // Координати прив'язані до оригінальних PNG 1536x1024 та FIT_CENTER.
+     // Підкладок немає: лише текст безпосередньо поверх світлого поля.
+     final FrameLayout target=birthdayOverlay;
+     target.post(()->{
+       if(birthdayOverlay!=target)return;
+       int w=target.getWidth(),h=target.getHeight();
+       float scale=Math.min(w/1536f,h/1024f);
+       float left=(w-1536f*scale)/2f,top=(h-1024f*scale)/2f;
+       // Звичайна листівка: світле поле приблизно x=575..1460, y=390..705.
+       // Ювілейна: x=390..1450, y=520..810.
+       int x=jubilee?490:630, y=jubilee?555:470, bw=jubilee?860:770, bh=jubilee?112:130;
+       TextView name=label(p.name,28,true);
+       name.setBackgroundColor(Color.TRANSPARENT);
+       name.setTextColor(0xFF51331B);name.setGravity(Gravity.CENTER);name.setMaxLines(2);
+       float base=p.name.length()>35?43:p.name.length()>25?52:62;
+       name.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,base*scale);
+       FrameLayout.LayoutParams np=new FrameLayout.LayoutParams(Math.round(bw*scale),Math.round(bh*scale));
+       np.leftMargin=Math.round(left+x*scale);np.topMargin=Math.round(top+y*scale);
+       target.addView(name,np);
+       if(jubilee){
+         TextView ageView=label(age+" років",28,true);
+         ageView.setBackgroundColor(Color.TRANSPARENT);
+         ageView.setTextColor(0xFF755020);ageView.setGravity(Gravity.CENTER);
+         ageView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,55*scale);
+         FrameLayout.LayoutParams ap=new FrameLayout.LayoutParams(Math.round(700*scale),Math.round(85*scale));
+         ap.leftMargin=Math.round(left+570*scale);ap.topMargin=Math.round(top+685*scale);
+         target.addView(ageView,ap);
+       }
+     });
     handler.postDelayed(this::showNextBirthday,60000);
   }
 
