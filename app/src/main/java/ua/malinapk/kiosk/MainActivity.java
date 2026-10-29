@@ -23,6 +23,13 @@ import java.io.*;
 import java.text.*;
 import java.util.*;
 import java.util.regex.*;
+import java.util.zip.*;
+import javax.xml.parsers.*;
+import org.w3c.dom.*;
+import android.graphics.*;
+import android.graphics.drawable.*;
+import android.media.MediaPlayer;
+import android.text.InputType;
 
 public class MainActivity extends Activity {
   private static final String SITE="https://malinapk.net/";
@@ -33,7 +40,7 @@ public class MainActivity extends Activity {
   private static final int NEWS_CACHE_VERSION=9;
   private static final String HOLIDAY_URL="https://daytoday.ua/sogodni/";
   private static final int HOLIDAY_CACHE_VERSION=2;
-  private static final int PICK_FOLDER=44;
+  private static final int PICK_FOLDER=44, PICK_DATA=45;
   private final Handler handler=new Handler(Looper.getMainLooper());
   private final ArrayList<Uri> playlist=new ArrayList<>();
   private final ArrayList<String> holidays=new ArrayList<>();
@@ -49,15 +56,37 @@ public class MainActivity extends Activity {
   private String cachedNews="";
   private String pendingNews=null;
   private String holidayDate="";
+  private Uri dataFolder;
+  private final LinkedHashMap<String,ArrayList<String>> facts=new LinkedHashMap<>();
+  private final HashMap<String,Integer> factPositions=new HashMap<>();
+  private final HashMap<String,ArrayList<Integer>> factOrders=new HashMap<>();
+  private final Random factRandom=new Random();
+  private final ArrayList<Person> people=new ArrayList<>();
+  private final ArrayList<String> topItems=new ArrayList<>();
+  private TextView newsBadge, holidayLabel;
+  private FrameLayout birthdayOverlay;
+  private boolean birthdayShowing=false;
+  private MediaPlayer birthdayMusic;
+  private String lastBirthdaySlot="";
+  private final ArrayList<Person> birthdayQueue=new ArrayList<>();
+  private int birthdayQueueIndex=0, categoryIndex=0;
+  private long categoryStarted=0;
+  private String currentCategory="";
+  private final ArrayList<String> activeCategories=new ArrayList<>();
+  private boolean tickerRunning=false;
+  private static class Person {String name;int day,month,year;Person(String n,int d,int m,int y){name=n;day=d;month=m;year=y;}}
+  private boolean enabled(String key){return getPreferences(0).getBoolean(key,true);}
+  private boolean anyTicker(){return enabled("news")||enabled("facts");}
+
   private final Runnable idle=()->{if(siteOpen&&System.currentTimeMillis()-lastTouch>=timeout)showVideo();};
   private final Runnable tick=new Runnable(){@Override public void run(){updateClock();handler.postDelayed(this,1000);}};
   private final Runnable refresh=new Runnable(){@Override public void run(){
     if(folder!=null)loadFolder(folder,false);
-    loadWeather();loadNews();loadHolidays();
+    loadWeather();loadNews();loadHolidays();if(dataFolder!=null)loadData();
     handler.postDelayed(this,15*60*1000);
   }};
   private final Runnable rotateHoliday=new Runnable(){@Override public void run(){
-    if(holidays.size()>1){holidayIndex=(holidayIndex+1)%holidays.size();holidaySwitcher.setText(holidays.get(holidayIndex));}
+    updateTopRotation();
     handler.postDelayed(this,20000);
   }};
   private int dp(float v){return (int)(v*getResources().getDisplayMetrics().density+.5f);}
@@ -119,7 +148,7 @@ public class MainActivity extends Activity {
     root.addView(bottomPanel,bp);
     LinearLayout newsRow=new LinearLayout(this);newsRow.setGravity(Gravity.CENTER_VERTICAL);
     bottomPanel.addView(newsRow,new FrameLayout.LayoutParams(-1,-1));
-    TextView newsBadge=label("ЛІСОВІ НОВИНИ",13,true);
+    newsBadge=label("ЛІСОВІ НОВИНИ",13,true);
     newsBadge.setSingleLine(true);newsBadge.setPadding(dp(10),dp(7),dp(10),dp(7));
     newsBadge.setBackground(bg(0xAA37684B,7));
     newsRow.addView(newsBadge,new LinearLayout.LayoutParams(-2,-2));
@@ -145,7 +174,7 @@ public class MainActivity extends Activity {
     LinearLayout holidayBox=new LinearLayout(this);holidayBox.setGravity(Gravity.CENTER);
     holidayBox.setOrientation(LinearLayout.VERTICAL);
     top.addView(holidayBox,new LinearLayout.LayoutParams(0,-1,4));
-    TextView holidayLabel=label("СЬОГОДНІ ВІДЗНАЧАЮТЬ",11,false);
+    holidayLabel=label("СЬОГОДНІ ВІДЗНАЧАЮТЬ",11,false);
     holidayLabel.setTextColor(0xFFBED7C7);holidayLabel.setGravity(Gravity.CENTER);
     holidayBox.addView(holidayLabel);
     holidaySwitcher=new TextSwitcher(this);
@@ -166,7 +195,7 @@ public class MainActivity extends Activity {
         JSONArray saved=new JSONArray(getPreferences(0).getString("holiday_cache","[]"));
         for(int i=0;i<saved.length();i++)holidays.add(saved.getString(i));
         holidays.removeIf(this::excludeHoliday);
-        if(!holidays.isEmpty())holidaySwitcher.setCurrentText(holidays.get(0));
+        if(!holidays.isEmpty())updateTopRotation();
       }catch(Exception ignored){}
     }
 
@@ -188,6 +217,9 @@ public class MainActivity extends Activity {
     String saved=getPreferences(0).getString("folder",null);
     if(saved!=null){folder=Uri.parse(saved);loadFolder(folder,true);}
     if(playlist.isEmpty())showEmpty();else playCurrent();
+    String dataSaved=getPreferences(0).getString("data_folder",null);
+    if(dataSaved!=null){dataFolder=Uri.parse(dataSaved);loadData();}
+    updateVisibility();
     handler.post(tick);handler.post(refresh);handler.postDelayed(rotateHoliday,20000);
   }
 
@@ -215,42 +247,125 @@ public class MainActivity extends Activity {
       lower.contains("package=com.google.android.youtube");
   }
 
-  // Текст дублюється, щоб після останньої новини без паузи йшла перша.
+  // Кожне повідомлення прокручується окремо: так не губимо позицію категорії.
   private void startTicker(){
-    if(tickerViewport==null||tickerText==null)return;
-    tickerText.clearAnimation();
-    int viewportWidth=tickerViewport.getWidth();
-    if(viewportWidth<=0){tickerViewport.postDelayed(this::startTicker,250);return;}
-    String unit=cachedNews.trim();
-    if(unit.isEmpty())unit="Завантажуємо новини…     ●     ";
-    if(!unit.endsWith("     ●     "))unit+="     ●     ";
-    int unitWidth=(int)Math.ceil(tickerText.getPaint().measureText(unit));
-    if(unitWidth<=0)return;
-    int copies=Math.max(2,2+viewportWidth/unitWidth);
-    StringBuilder repeated=new StringBuilder(unit.length()*copies);
-    for(int i=0;i<copies;i++)repeated.append(unit);
-    tickerText.setText(repeated.toString());
-    FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)tickerText.getLayoutParams();
-    p.width=(int)Math.ceil(tickerText.getPaint().measureText(repeated.toString()))+dp(4);
-    tickerText.setLayoutParams(p);
-    TranslateAnimation move=new TranslateAnimation(0,-unitWidth,0,0);
-    move.setDuration(Math.max(3000,(long)(unitWidth*1000.0/dp(70))));
-    move.setRepeatCount(Animation.INFINITE);
-    move.setInterpolator(new LinearInterpolator());
-    move.setAnimationListener(new Animation.AnimationListener(){
-      @Override public void onAnimationStart(Animation animation){}
-      @Override public void onAnimationEnd(Animation animation){}
-      @Override public void onAnimationRepeat(Animation animation){
-        if(pendingNews!=null){
-          cachedNews=pendingNews;
-          pendingNews=null;
-          tickerViewport.post(()->startTicker());
+    if(tickerViewport==null||tickerText==null||!anyTicker())return;
+    tickerText.clearAnimation();tickerRunning=false;
+    if(tickerViewport.getWidth()<=0){tickerViewport.postDelayed(this::startTicker,250);return;}
+    rebuildCategories();
+    if(activeCategories.isEmpty()){tickerText.setText("Немає повідомлень");return;}
+    if(categoryIndex>=activeCategories.size())categoryIndex=0;
+    String category=activeCategories.get(categoryIndex);
+    if(!category.equals(currentCategory)){currentCategory=category;categoryStarted=System.currentTimeMillis();}
+    ArrayList<String> items=category.equals("Лісові новини")?newsItems():facts.get(category);
+    if(items==null||items.isEmpty()){nextCategory();return;}
+    int position=factPositions.containsKey(category)?factPositions.get(category):0;
+    position%=items.size();
+    final int shownPosition=position;
+    final boolean isFact=!category.equals("Лісові новини");
+    final int itemIndex=isFact?factOrder(category,items).get(shownPosition):shownPosition;
+    String message=items.get(itemIndex);
+    newsBadge.setText(category.toUpperCase(new Locale("uk","UA")));
+    tickerText.setText(message);
+    int w=(int)Math.ceil(tickerText.getPaint().measureText(message))+dp(20);
+    FrameLayout.LayoutParams lp=(FrameLayout.LayoutParams)tickerText.getLayoutParams();lp.width=w;tickerText.setLayoutParams(lp);
+    TranslateAnimation a=new TranslateAnimation(tickerViewport.getWidth(),-w,0,0);
+    a.setDuration(Math.max(2500,(long)((tickerViewport.getWidth()+w)*1000.0/dp(85))));
+    a.setInterpolator(new LinearInterpolator());
+    a.setAnimationListener(new Animation.AnimationListener(){
+      public void onAnimationStart(Animation x){}
+      public void onAnimationRepeat(Animation x){}
+      public void onAnimationEnd(Animation x){
+        if(!tickerRunning)return;
+        tickerRunning=false;
+        int next=(shownPosition+1)%items.size();
+        if(isFact&&next==0){
+          // Після показу всіх активних фактів починається нове випадкове коло.
+          shuffleFactOrder(category,items);
         }
+        factPositions.put(category,next);
+        getPreferences(0).edit().putInt("ticker_pos_"+category,next).apply();
+        if(!anyTicker())return;
+        if(System.currentTimeMillis()-categoryStarted>=300000||next==0)nextCategory();
+        else tickerViewport.post(()->startTicker());
       }
     });
-    tickerText.startAnimation(move);
+    tickerRunning=true;tickerText.startAnimation(a);
   }
-
+  // Для кожної категорії окрема випадкова перестановка без повторень.
+  // Порядок та позиція зберігаються після закриття додатка.
+  private ArrayList<Integer> factOrder(String category,ArrayList<String> items){
+    ArrayList<Integer> existing=factOrders.get(category);
+    if(existing!=null&&existing.size()==items.size())return existing;
+    String key="fact_shuffle_"+category;
+    String saved=getPreferences(0).getString(key,"");
+    String fingerprint=Integer.toString(items.toString().hashCode());
+    ArrayList<Integer> order=new ArrayList<>();
+    try{
+      String[] parts=saved.split("\\|");
+      if(parts.length==2&&fingerprint.equals(parts[0])){
+        boolean[] used=new boolean[items.size()];
+        for(String n:parts[1].split(",")){
+          int i=Integer.parseInt(n);
+          if(i<0||i>=items.size()||used[i])throw new IllegalArgumentException();
+          used[i]=true;order.add(i);
+        }
+        if(order.size()!=items.size())order.clear();
+      }
+    }catch(Exception ignored){order.clear();}
+    if(order.size()!=items.size()){
+      order.clear();for(int i=0;i<items.size();i++)order.add(i);
+      Collections.shuffle(order,factRandom);
+      factPositions.put(category,0);
+      getPreferences(0).edit().putInt("ticker_pos_"+category,0).apply();
+      persistFactOrder(category,items,order);
+    }
+    factOrders.put(category,order);return order;
+  }
+  private void shuffleFactOrder(String category,ArrayList<String> items){
+    ArrayList<Integer> order=new ArrayList<>(factOrder(category,items));
+    Collections.shuffle(order,factRandom);
+    // Не повторювати останній факт попереднього кола одразу на старті нового.
+    if(order.size()>1){
+      ArrayList<Integer> old=factOrders.get(category);
+      int previousLast=old.get(old.size()-1);
+      if(order.get(0)==previousLast)Collections.swap(order,0,1);
+    }
+    factOrders.put(category,order);persistFactOrder(category,items,order);
+  }
+  private void persistFactOrder(String category,ArrayList<String> items,ArrayList<Integer> order){
+    StringBuilder b=new StringBuilder(Integer.toString(items.toString().hashCode())).append('|');
+    for(int i=0;i<order.size();i++){if(i>0)b.append(',');b.append(order.get(i));}
+    getPreferences(0).edit().putString("fact_shuffle_"+category,b.toString()).apply();
+  }
+  private ArrayList<String> newsItems(){
+    ArrayList<String> result=new ArrayList<>();
+    for(String part:cachedNews.split("\\s*[●•]\\s*")){String t=part.trim();if(!t.isEmpty())result.add(t);}
+    return result;
+  }
+  private void nextCategory(){categoryIndex=(categoryIndex+1)%Math.max(1,activeCategories.size());currentCategory="";tickerViewport.post(this::startTicker);}
+  private void rebuildCategories(){
+    activeCategories.clear();if(enabled("news")&&!cachedNews.trim().isEmpty())activeCategories.add("Лісові новини");
+    if(enabled("facts"))for(Map.Entry<String,ArrayList<String>> e:facts.entrySet())if(!e.getValue().isEmpty())activeCategories.add(e.getKey());
+  }
+  private void updateTopRotation(){
+    topItems.clear();
+    if(enabled("holidays"))topItems.addAll(holidays);
+    if(enabled("birthdays")){
+      Calendar c=Calendar.getInstance();int month=c.get(Calendar.MONTH)+1;
+      ArrayList<Person> sorted=new ArrayList<>(people);Collections.sort(sorted,(a,b)->Integer.compare(a.day,b.day));
+      for(Person person:sorted)if(person.month==month)topItems.add(String.format(new Locale("uk","UA"),"%02d.%02d — %s",person.day,person.month,person.name));
+    }
+    holidayLabel.setText(enabled("holidays")&&enabled("birthdays")?"СВЯТА ТА ІМЕНИННИКИ":enabled("birthdays")?"ІМЕНИННИКИ МІСЯЦЯ":"СЬОГОДНІ ВІДЗНАЧАЮТЬ");
+    holidayLabel.setVisibility(topItems.isEmpty()?View.GONE:View.VISIBLE);
+    holidaySwitcher.setVisibility(topItems.isEmpty()?View.GONE:View.VISIBLE);
+    if(!topItems.isEmpty()){holidayIndex%=topItems.size();holidaySwitcher.setText(topItems.get(holidayIndex));holidayIndex++;}
+  }
+  private void updateVisibility(){
+    if(bottomPanel!=null)bottomPanel.setVisibility(!siteOpen&&anyTicker()?View.VISIBLE:View.GONE);
+    updateTopRotation();
+    if(tickerViewport!=null){tickerText.clearAnimation();tickerRunning=false;currentCategory="";categoryIndex=0;if(anyTicker())tickerViewport.post(this::startTicker);}
+  }
   private static class FitVideoView extends VideoView{
     private int videoWidth=0,videoHeight=0;private boolean stretch=false;
     FitVideoView(Context context){super(context);}
@@ -267,6 +382,7 @@ public class MainActivity extends Activity {
   private void updateClock(){
     Date now=new Date();clock.setText(new SimpleDateFormat("HH:mm",new Locale("uk","UA")).format(now));
     date.setText(new SimpleDateFormat("EEEE, d MMMM",new Locale("uk","UA")).format(now));
+    checkBirthdays();
     if(!todayKey().equals(holidayDate)){
       holidayDate=todayKey();holidays.clear();holidayIndex=0;
       holidaySwitcher.setCurrentText("Завантажуємо свята…");loadHolidays();
@@ -284,7 +400,7 @@ public class MainActivity extends Activity {
   }
   private void playNext(){if(playlist.isEmpty()||siteOpen)return;index=(index+1)%playlist.size();lastPosition=0;playCurrent();}
   private void showSite(){
-    if(siteOpen)return;siteOpen=true;lastPosition=video.getCurrentPosition();
+    if(siteOpen||birthdayShowing)return;siteOpen=true;lastPosition=video.getCurrentPosition();
     if(video.isPlaying())video.pause();videoLayer.setVisibility(View.GONE);
     bottomPanel.setVisibility(View.GONE);web.setVisibility(View.VISIBLE);
     // Верхня панель у режимі сайту непрозора.
@@ -296,7 +412,7 @@ public class MainActivity extends Activity {
   private void showVideo(){
     if(!siteOpen)return;siteOpen=false;handler.removeCallbacks(idle);
     web.onPause();web.setVisibility(View.GONE);videoLayer.setVisibility(View.VISIBLE);
-    bottomPanel.setVisibility(View.VISIBLE);
+    bottomPanel.setVisibility(anyTicker()?View.VISIBLE:View.GONE);
     LinearLayout top=(LinearLayout)root.getChildAt(root.getChildCount()-1);
     top.setBackgroundColor(0x99142A20);
     web.loadUrl("about:blank");web.onResume();
@@ -307,6 +423,17 @@ public class MainActivity extends Activity {
     if(siteOpen&&e.getAction()==MotionEvent.ACTION_DOWN){lastTouch=System.currentTimeMillis();scheduleIdle();}
     return super.dispatchTouchEvent(e);
   }
+  private void chooseDataFolder(){Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+    startActivityForResult(i,PICK_DATA);}
+  private void displaySettings(){
+    String[] labels={"Кнопка ігор (поки без гри)","Іменинники", "Свята", "Онлайн-новини", "Факти з Excel"};
+    String[] keys={"games","birthdays","holidays","news","facts"};
+    boolean[] values=new boolean[keys.length];for(int i=0;i<keys.length;i++)values[i]=enabled(keys[i]);
+    new AlertDialog.Builder(this).setTitle("Відображення елементів")
+      .setMultiChoiceItems(labels,values,(d,i,checked)->{getPreferences(0).edit().putBoolean(keys[i],checked).apply();updateVisibility();})
+      .setPositiveButton("Готово",(d,w)->updateVisibility()).show();
+  }
   private void chooseFolder(){Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
     i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
     startActivityForResult(i,PICK_FOLDER);}
@@ -314,7 +441,7 @@ public class MainActivity extends Activity {
     boolean sound=getPreferences(0).getBoolean("sound",false),stretch=getPreferences(0).getBoolean("stretch_video",false);
     String[] opts={"Вибрати папку Movies/ForestKiosk","Час бездіяльності",
       "Звук відео: "+(sound?"увімкнений":"вимкнений"),"Оновити список відео",
-      "Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),"Оновити свята та новини"};
+      "Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),"Оновити свята та новини", "Вибрати папку з Excel і листівками", "Відображення елементів", "Перечитати Excel", "Розклад привітань і мелодія"};
     new AlertDialog.Builder(this).setTitle("Налаштування MalinForest").setItems(opts,(d,w)->{
       if(w==0)chooseFolder();
       if(w==1){String[] times={"30 секунд","1 хвилина","2 хвилини","5 хвилин"};int[] values={30000,60000,120000,300000};
@@ -331,10 +458,15 @@ public class MainActivity extends Activity {
         getPreferences(0).edit().putBoolean("stretch_video",enabled).apply();video.setStretchMode(enabled);
         Toast.makeText(this,enabled?"Розтягування увімкнено":"Збереження пропорцій увімкнено",Toast.LENGTH_SHORT).show();}
       if(w==5){loadHolidays();loadNews();Toast.makeText(this,"Оновлюємо дані…",Toast.LENGTH_SHORT).show();}
+      if(w==6)chooseDataFolder();if(w==7)displaySettings();if(w==8)loadData();if(w==9)birthdaySettings();
     }).show();
   }
   @Override protected void onActivityResult(int request,int result,Intent data){
     super.onActivityResult(request,result,data);
+    if(request==PICK_DATA&&result==RESULT_OK&&data!=null){
+      Uri uri=data.getData();try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}
+      dataFolder=uri;getPreferences(0).edit().putString("data_folder",uri.toString()).apply();loadData();return;
+    }
     if(request==PICK_FOLDER&&result==RESULT_OK&&data!=null){
       Uri uri=data.getData();try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}
       folder=uri;getPreferences(0).edit().putString("folder",uri.toString()).apply();loadFolder(uri,true);index=0;
@@ -550,9 +682,7 @@ public class MainActivity extends Activity {
       getPreferences(0).edit().putInt("news_cache_version",NEWS_CACHE_VERSION)
         .putString("news_cache",joined).apply();
       runOnUiThread(()->{
-        if(cachedNews.isEmpty()){
-          cachedNews=joined;tickerViewport.post(this::startTicker);
-        }else if(!cachedNews.equals(joined))pendingNews=joined;
+        if(!cachedNews.equals(joined)){cachedNews=joined;pendingNews=null;runOnUiThread(()->updateVisibility());}
       });
     }else if(cachedNews.isEmpty())runOnUiThread(()->{
       cachedNews="Лісові новини тимчасово недоступні     ●     ";
@@ -611,7 +741,7 @@ public class MainActivity extends Activity {
         runOnUiThread(()->{
           if(!todayKey().equals(key))return;
           holidays.clear();holidays.addAll(result);holidayIndex=0;holidayDate=key;
-          holidaySwitcher.setCurrentText(holidays.get(0));
+          updateTopRotation();
         });
       }else if(holidays.isEmpty())runOnUiThread(()->holidaySwitcher.setCurrentText("Інформація про свята недоступна"));
     }catch(Exception ignored){
@@ -626,4 +756,147 @@ public class MainActivity extends Activity {
   @Override protected void onPause(){if(video!=null&&video.isPlaying())video.pause();super.onPause();}
   @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);
     if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();super.onDestroy();}
+  // Читаємо XLSX як стандартний ZIP/XML без сторонніх залежностей.
+  private Uri dataFile(String name){
+    if(dataFolder==null)return null;
+    try{Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(dataFolder,DocumentsContract.getTreeDocumentId(dataFolder));
+      try(Cursor c=getContentResolver().query(children,new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null)){
+        if(c!=null)while(c.moveToNext())if(name.equalsIgnoreCase(c.getString(1)))return DocumentsContract.buildDocumentUriUsingTree(dataFolder,c.getString(0));
+      }}catch(Exception ignored){}return null;
+  }
+  private static String xmlText(Element e,String tag){NodeList nodes=e.getElementsByTagNameNS("*",tag);return nodes.getLength()>0?nodes.item(0).getTextContent():"";}
+  private static Document xml(byte[] bytes)throws Exception{DocumentBuilderFactory f=DocumentBuilderFactory.newInstance();f.setNamespaceAware(true);
+    f.setFeature("http://apache.org/xml/features/disallow-doctype-decl",true);
+    return f.newDocumentBuilder().parse(new ByteArrayInputStream(bytes));}
+  private LinkedHashMap<String,ArrayList<String[]>> readWorkbook(Uri uri)throws Exception{
+    HashMap<String,byte[]> files=new HashMap<>();
+    try(ZipInputStream z=new ZipInputStream(getContentResolver().openInputStream(uri))){ZipEntry e;ByteArrayOutputStream out;
+      while((e=z.getNextEntry())!=null){if(e.getSize()>8*1024*1024)throw new IOException("Завеликий файл");out=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;while((n=z.read(b))>0){out.write(b,0,n);if(out.size()>8*1024*1024)throw new IOException("Завеликий файл");}files.put(e.getName(),out.toByteArray());}}
+    ArrayList<String> shared=new ArrayList<>();
+    if(files.containsKey("xl/sharedStrings.xml")){NodeList si=xml(files.get("xl/sharedStrings.xml")).getElementsByTagNameNS("*","si");
+      for(int i=0;i<si.getLength();i++)shared.add(si.item(i).getTextContent());}
+    Document wb=xml(files.get("xl/workbook.xml"));
+    Document rel=xml(files.get("xl/_rels/workbook.xml.rels"));HashMap<String,String> paths=new HashMap<>();
+    NodeList rs=rel.getElementsByTagNameNS("*","Relationship");for(int i=0;i<rs.getLength();i++){Element e=(Element)rs.item(i);String path=e.getAttribute("Target");if(path.startsWith("/"))path=path.substring(1);else if(!path.startsWith("xl/"))path="xl/"+path;paths.put(e.getAttribute("Id"),path);}
+    LinkedHashMap<String,ArrayList<String[]>> result=new LinkedHashMap<>();
+    NodeList sheets=wb.getElementsByTagNameNS("*","sheet");for(int i=0;i<sheets.getLength();i++){
+      Element sh=(Element)sheets.item(i);String name=sh.getAttribute("name");String id=sh.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships","id");
+      byte[] sheetBytes=files.get(paths.get(id));if(sheetBytes==null)continue;
+      NodeList rows=xml(sheetBytes).getElementsByTagNameNS("*","row");ArrayList<String[]> table=new ArrayList<>();
+      for(int r=0;r<rows.getLength();r++){String[] cols=new String[8];Arrays.fill(cols,"");NodeList cells=((Element)rows.item(r)).getElementsByTagNameNS("*","c");
+        for(int k=0;k<cells.getLength();k++){Element cell=(Element)cells.item(k);String ref=cell.getAttribute("r");int col=0;while(col<ref.length()&&Character.isLetter(ref.charAt(col)))col++;int idx=0;for(int j=0;j<col;j++)idx=idx*26+(Character.toUpperCase(ref.charAt(j))-'A'+1);idx--;
+          if(idx<0||idx>=cols.length)continue;String value=xmlText(cell,"v");String type=cell.getAttribute("t");if("s".equals(type)){try{value=shared.get(Integer.parseInt(value));}catch(Exception ignored){value="";}}
+          if("inlineStr".equals(type))value=xmlText(cell,"is");cols[idx]=value.trim();}
+        table.add(cols);
+      }result.put(name,table);
+    }return result;
+  }
+  private void loadData(){if(dataFolder==null)return;new Thread(()->{
+    LinkedHashMap<String,ArrayList<String>> newFacts=new LinkedHashMap<>();ArrayList<Person> newPeople=new ArrayList<>();
+    String errors="";
+    try{Uri f=dataFile("MalinForest.xlsx");if(f!=null){LinkedHashMap<String,ArrayList<String[]>> wb=readWorkbook(f);
+      for(Map.Entry<String,ArrayList<String[]>> sh:wb.entrySet()){
+        if("Налаштування".equalsIgnoreCase(sh.getKey()))continue;ArrayList<String> messages=new ArrayList<>();
+        for(int i=1;i<sh.getValue().size();i++){String[] row=sh.getValue().get(i);if(!row[1].isEmpty()&&!"Ні".equalsIgnoreCase(row[2]))messages.add(row[1]);}
+        newFacts.put(sh.getKey(),messages);
+      }}else errors+="Немає MalinForest.xlsx. ";}catch(Exception ex){errors+="Помилка MalinForest.xlsx: "+ex.getMessage()+". ";}
+    try{Uri f=dataFile("Іменинники.xlsx");if(f==null)f=dataFile("MalinForest_Іменинники.xlsx");if(f!=null){LinkedHashMap<String,ArrayList<String[]>> wb=readWorkbook(f);
+      for(String[] row:wb.values().iterator().next()){
+        String name=(row[0]+" "+row[1]+" "+row[2]).trim();if(name.isEmpty()||row[0].equalsIgnoreCase("Прізвище"))continue;
+        int[] d=parseBirthday(row[3]);if(d!=null)newPeople.add(new Person(name,d[0],d[1],d[2]));
+      }}else errors+="Немає Іменинники.xlsx. ";}catch(Exception ex){errors+="Помилка Іменинники.xlsx: "+ex.getMessage();}
+    String finalErrors=errors;runOnUiThread(()->{facts.clear();facts.putAll(newFacts);people.clear();people.addAll(newPeople);
+      factOrders.clear();
+      for(String key:facts.keySet())factPositions.put(key,getPreferences(0).getInt("ticker_pos_"+key,0));
+      updateVisibility();if(!finalErrors.isEmpty())Toast.makeText(this,finalErrors,Toast.LENGTH_LONG).show();});
+  }).start();}
+  private int[] parseBirthday(String raw){try{
+    String v=raw.trim();if(v.matches("[0-9]+(\\.[0-9]+)?")){long days=(long)Double.parseDouble(v);Calendar c=Calendar.getInstance();c.set(1899,11,30,12,0);c.add(Calendar.DAY_OF_YEAR,(int)days);return new int[]{c.get(Calendar.DAY_OF_MONTH),c.get(Calendar.MONTH)+1,c.get(Calendar.YEAR)};}
+    String[] p=v.split("[./-]");if(p.length==3){int d=Integer.parseInt(p[0]),m=Integer.parseInt(p[1]),y=Integer.parseInt(p[2]);if(y<100)y+=2000; if(d>=1&&d<=31&&m>=1&&m<=12)return new int[]{d,m,y};}
+  }catch(Exception ignored){}return null;}
+  private String birthdayTimes(){return getPreferences(0).getString("birthday_times","08:45,08:50,08:55");}
+  private ArrayList<String> parseTimes(String csv){
+    TreeSet<String> sorted=new TreeSet<>();
+    for(String part:csv.split(",")){String t=part.trim();if(t.matches("(?:[01]\\d|2[0-3]):[0-5]\\d"))sorted.add(t);}
+    return new ArrayList<>(sorted);
+  }
+  private void birthdaySettings(){
+    LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);layout.setPadding(dp(22),dp(10),dp(22),dp(5));
+    TextView help=label("Час показу (ГГ:ХХ). Додайте кілька значень через кому. Наприклад: 08:45,08:50,08:55",15,false);
+    help.setTextColor(Color.DKGRAY);layout.addView(help);
+    EditText times=new EditText(this);times.setSingleLine(false);times.setText(birthdayTimes());layout.addView(times);
+    CheckBox hourly=new CheckBox(this);hourly.setText("Додатково показувати щогодини (о ХХ:00)");hourly.setChecked(getPreferences(0).getBoolean("birthday_hourly",false));layout.addView(hourly);
+    CheckBox music=new CheckBox(this);music.setText("Мелодія привітання (birthday.mp3)");music.setChecked(getPreferences(0).getBoolean("birthday_music",true));layout.addView(music);
+    TextView vol=label("Гучність мелодії",15,false);vol.setTextColor(Color.DKGRAY);layout.addView(vol);
+    SeekBar volume=new SeekBar(this);volume.setMax(100);volume.setProgress(getPreferences(0).getInt("birthday_volume",50));layout.addView(volume);
+    new AlertDialog.Builder(this).setTitle("Привітання іменинників").setView(layout)
+      .setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{
+        String raw=times.getText().toString().replace(';',',').replace('\n',',');ArrayList<String> list=parseTimes(raw);
+        if(!raw.trim().isEmpty()&&list.size()!=raw.split(",").length){Toast.makeText(this,"Деякі значення часу неправильні — їх пропущено",Toast.LENGTH_LONG).show();}
+        getPreferences(0).edit().putString("birthday_times",TextUtils.join(",",list))
+          .putBoolean("birthday_hourly",hourly.isChecked()).putBoolean("birthday_music",music.isChecked())
+          .putInt("birthday_volume",volume.getProgress()).apply();
+        if(!music.isChecked())stopBirthdayMusic();
+      }).show();
+  }
+  private void checkBirthdays(){
+    if(!enabled("birthdays")||siteOpen||birthdayShowing||dataFolder==null)return;
+    Calendar c=Calendar.getInstance();int hour=c.get(Calendar.HOUR_OF_DAY),minute=c.get(Calendar.MINUTE);
+    String hhmm=String.format(Locale.US,"%02d:%02d",hour,minute);
+    boolean scheduled=parseTimes(birthdayTimes()).contains(hhmm)||
+      (getPreferences(0).getBoolean("birthday_hourly",false)&&minute==0);
+    if(!scheduled)return;
+    String key=todayKey()+"_"+hhmm;
+    if(key.equals(lastBirthdaySlot)||getPreferences(0).getBoolean("birthday_shown_"+key,false))return;
+    birthdayQueue.clear();int day=c.get(Calendar.DAY_OF_MONTH),month=c.get(Calendar.MONTH)+1;
+    for(Person p:people)if(p.day==day&&p.month==month)birthdayQueue.add(p);
+    if(birthdayQueue.isEmpty())return;
+    lastBirthdaySlot=key;
+    getPreferences(0).edit().putBoolean("birthday_shown_"+key,true).apply();
+    birthdayQueueIndex=0;showNextBirthday();
+  }
+  private void stopBirthdayMusic(){
+    if(birthdayMusic!=null){try{birthdayMusic.stop();}catch(Exception ignored){}
+      try{birthdayMusic.release();}catch(Exception ignored){}birthdayMusic=null;}
+  }
+  private void startBirthdayMusic(){
+    stopBirthdayMusic();if(!getPreferences(0).getBoolean("birthday_music",true))return;
+    Uri uri=dataFile("birthday.mp3");if(uri==null)return;
+    try{birthdayMusic=new MediaPlayer();birthdayMusic.setDataSource(this,uri);
+      birthdayMusic.setLooping(true);
+      float volume=getPreferences(0).getInt("birthday_volume",50)/100f;
+      birthdayMusic.setVolume(volume,volume);birthdayMusic.prepare();birthdayMusic.start();
+    }catch(Exception ex){stopBirthdayMusic();}
+  }
+  private void showNextBirthday(){if(siteOpen){stopBirthdayMusic();birthdayShowing=false;if(birthdayOverlay!=null){root.removeView(birthdayOverlay);birthdayOverlay=null;}return;}if(birthdayQueueIndex>=birthdayQueue.size()){
+      if(birthdayOverlay!=null){root.removeView(birthdayOverlay);birthdayOverlay=null;}
+      stopBirthdayMusic();birthdayShowing=false;if(!siteOpen&&video!=null&&!playlist.isEmpty())video.start();return;}
+    birthdayShowing=true;if(video!=null&&video.isPlaying())video.pause();
+    startBirthdayMusic();
+    Person p=birthdayQueue.get(birthdayQueueIndex++);int age=Calendar.getInstance().get(Calendar.YEAR)-p.year;
+    boolean jubilee=age>=25&&age%5==0;
+    if(birthdayOverlay!=null)root.removeView(birthdayOverlay);
+    birthdayOverlay=new FrameLayout(this);birthdayOverlay.setBackgroundColor(Color.BLACK);
+    root.addView(birthdayOverlay,new FrameLayout.LayoutParams(-1,-1));
+    Uri img=dataFile(jubilee?"jubilee.png":"birthday.png");
+    if(img!=null){try{ImageView view=new ImageView(this);view.setImageURI(img);view.setScaleType(ImageView.ScaleType.FIT_CENTER);
+      birthdayOverlay.addView(view,new FrameLayout.LayoutParams(-1,-1));}catch(Exception ignored){}}
+    // Координати у відсотках від картинки 1536x1024, з урахуванням FIT_CENTER.
+    birthdayOverlay.post(()->{
+      if(birthdayOverlay==null)return;int w=birthdayOverlay.getWidth(),h=birthdayOverlay.getHeight();
+      float scale=Math.min(w/1536f,h/1024f);float left=(w-1536*scale)/2f,top=(h-1024*scale)/2f;
+      TextView name=label(p.name,Math.max(16,(int)(42*scale/getResources().getDisplayMetrics().scaledDensity)),true);
+      name.setTextColor(0xFF51331B);name.setGravity(Gravity.CENTER);name.setMaxLines(2);
+      if(!jubilee)name.setBackgroundColor(0xFFFBE8C6);
+      name.setTextSize(p.name.length()>35?19:p.name.length()>25?25:33);
+      FrameLayout.LayoutParams np=new FrameLayout.LayoutParams((int)(850*scale),(int)(120*scale));
+      np.leftMargin=(int)(left+540*scale);np.topMargin=(int)(top+(jubilee?565:475)*scale);birthdayOverlay.addView(name,np);
+      if(jubilee){TextView ageView=label(age+" років",28,true);ageView.setTextColor(0xFF755020);ageView.setGravity(Gravity.CENTER);
+        FrameLayout.LayoutParams ap=new FrameLayout.LayoutParams((int)(750*scale),(int)(75*scale));ap.leftMargin=(int)(left+590*scale);ap.topMargin=(int)(top+690*scale);birthdayOverlay.addView(ageView,ap);}
+    });
+    handler.postDelayed(this::showNextBirthday,60000);
+  }
+
+  @Override protected void onDestroy(){stopBirthdayMusic();super.onDestroy();}
+
 }
