@@ -765,8 +765,13 @@ public class MainActivity extends Activity {
       }}catch(Exception ignored){}return null;
   }
   private static String xmlText(Element e,String tag){NodeList nodes=e.getElementsByTagNameNS("*",tag);return nodes.getLength()>0?nodes.item(0).getTextContent():"";}
-  private static Document xml(byte[] bytes)throws Exception{DocumentBuilderFactory f=DocumentBuilderFactory.newInstance();f.setNamespaceAware(true);
-    f.setFeature("http://apache.org/xml/features/disallow-doctype-decl",true);
+  private static Document xml(byte[] bytes)throws Exception{
+    if(bytes==null)throw new IOException("Відсутній XML-файл у XLSX");
+    // Android XML parsers may not support Apache-specific setFeature flags.
+    // XLSX XML does not require DTD; reject DTD/entity declarations explicitly.
+    String header=new String(bytes,java.nio.charset.StandardCharsets.UTF_8).toUpperCase(java.util.Locale.ROOT);
+    if(header.contains("<!DOCTYPE")||header.contains("<!ENTITY"))throw new IOException("Неприпустимий DTD у XLSX");
+    DocumentBuilderFactory f=DocumentBuilderFactory.newInstance();f.setNamespaceAware(true);
     return f.newDocumentBuilder().parse(new ByteArrayInputStream(bytes));}
   private LinkedHashMap<String,ArrayList<String[]>> readWorkbook(Uri uri)throws Exception{
     HashMap<String,byte[]> files=new HashMap<>();
