@@ -583,7 +583,7 @@ public class MainActivity extends Activity {
   private void settings(){
     boolean stretch=getPreferences(0).getBoolean("stretch_video",true);
     String[] opts={"Вибрати папку з відео","Вибрати папку з файлами (MalinForest)","Відображення елементів",
-      "Розклад привітань і мелодія","Час бездіяльності","Таймер бездіяльності у грі",
+      "Розклад привітань","Час бездіяльності","Таймер бездіяльності у грі",
       "Час зміни верхньої панелі","Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),
       "Регулювання звуку","Оновити список відео",
       "Оновити свята та новини","Перечитати Excel"};
@@ -1163,28 +1163,102 @@ public class MainActivity extends Activity {
     for(String part:csv.split(",")){String t=part.trim();if(t.matches("(?:[01]\\d|2[0-3]):[0-5]\\d"))sorted.add(t);}
     return new ArrayList<>(sorted);
   }
+  private int birthdayDisplaySeconds(){
+    int v=getPreferences(0).getInt("birthday_display_seconds",60);
+    return v>=10&&v<=120&&v%10==0?v:60;
+  }
+  private HashSet<String> disabledBirthdayTimes(){
+    return new HashSet<>(parseTimes(getPreferences(0).getString("birthday_disabled_times","")));
+  }
   private void birthdaySettings(){
-    LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);layout.setPadding(dp(22),dp(10),dp(22),dp(5));
-    TextView help=label("Час показу (ГГ:ХХ). Додайте кілька значень через кому. Наприклад: 08:45,08:50,08:55",15,false);
-    help.setTextColor(Color.DKGRAY);layout.addView(help);
-    EditText times=new EditText(this);times.setSingleLine(false);times.setText(birthdayTimes());layout.addView(times);
-    CheckBox hourly=new CheckBox(this);hourly.setText("Додатково показувати щогодини (о ХХ:00)");hourly.setChecked(getPreferences(0).getBoolean("birthday_hourly",false));layout.addView(hourly);
-    CheckBox music=new CheckBox(this);music.setText("Мелодія привітання (birthday.mp3)");music.setChecked(getPreferences(0).getBoolean("birthday_music",true));layout.addView(music);
-    new AlertDialog.Builder(this).setTitle("Привітання іменинників").setView(layout)
-      .setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{
-        String raw=times.getText().toString().replace(';',',').replace('\n',',');ArrayList<String> list=parseTimes(raw);
-        if(!raw.trim().isEmpty()&&list.size()!=raw.split(",").length){Toast.makeText(this,"Деякі значення часу неправильні — їх пропущено",Toast.LENGTH_LONG).show();}
-        getPreferences(0).edit().putString("birthday_times",TextUtils.join(",",list))
-          .putBoolean("birthday_hourly",hourly.isChecked()).putBoolean("birthday_music",music.isChecked()).apply();
-        if(!music.isChecked())stopBirthdayMusic();
+    LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);
+    layout.setPadding(dp(18),dp(8),dp(18),dp(12));
+    ScrollView scroll=new ScrollView(this);scroll.setFillViewport(false);
+    LinearLayout list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);
+    scroll.addView(list);layout.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+    TextView heading=label("Тривалість одного привітання",16,true);layout.addView(heading);
+    TextView duration=label("",16,false);duration.setGravity(Gravity.CENTER);layout.addView(duration);
+    SeekBar seek=new SeekBar(this);seek.setMax(11);seek.setProgress(birthdayDisplaySeconds()/10-1);
+    layout.addView(seek);duration.setText(birthdayDurationLabel((seek.getProgress()+1)*10));
+    seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+      public void onProgressChanged(SeekBar b,int progress,boolean fromUser){duration.setText(birthdayDurationLabel((progress+1)*10));
+        if(fromUser)getPreferences(0).edit().putInt("birthday_display_seconds",(progress+1)*10).apply();}
+      public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}
+    });
+    TextView add=label("+",40,true);add.setTextColor(0xFF1769AA);add.setGravity(Gravity.CENTER);
+    layout.addView(add,new LinearLayout.LayoutParams(-1,dp(65)));
+    AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Розклад привітань")
+      .setView(layout).setNegativeButton("Закрити",null).create();
+    Runnable refreshList=new Runnable(){@Override public void run(){
+      list.removeAllViews();HashSet<String> disabled=disabledBirthdayTimes();
+      for(String time:parseTimes(birthdayTimes())){
+        LinearLayout row=new LinearLayout(MainActivity.this);row.setGravity(Gravity.CENTER_VERTICAL);
+        TextView clock=label(time,29,true);clock.setPadding(dp(8),dp(10),dp(8),dp(10));
+        row.addView(clock,new LinearLayout.LayoutParams(0,dp(70),1));
+        clock.setOnClickListener(v->birthdayTimePicker(time,()->{dialog.dismiss();birthdaySettings();}));
+        Switch toggle=new Switch(MainActivity.this);toggle.setChecked(!disabled.contains(time));
+        toggle.setContentDescription("Увімкнути привітання о "+time);
+        row.addView(toggle);toggle.setOnCheckedChangeListener((button,checked)->{
+          HashSet<String> d=disabledBirthdayTimes();if(checked)d.remove(time);else d.add(time);
+          getPreferences(0).edit().putString("birthday_disabled_times",TextUtils.join(",",d)).apply();
+        });
+        TextView remove=label("✕",23,true);remove.setGravity(Gravity.CENTER);
+        remove.setContentDescription("Видалити "+time);remove.setPadding(dp(14),0,dp(6),0);
+        row.addView(remove);remove.setOnClickListener(v->{
+          ArrayList<String> times=parseTimes(birthdayTimes());times.remove(time);
+          HashSet<String> d=disabledBirthdayTimes();d.remove(time);
+          getPreferences(0).edit().putString("birthday_times",TextUtils.join(",",times))
+            .putString("birthday_disabled_times",TextUtils.join(",",d)).apply();run();
+        });
+        list.addView(row);View line=new View(MainActivity.this);line.setBackgroundColor(0xFFE0E0E0);
+        list.addView(line,new LinearLayout.LayoutParams(-1,dp(1)));
+      }
+    }};
+    refreshList.run();
+    add.setOnClickListener(v->birthdayTimePicker(null,()->{dialog.dismiss();birthdaySettings();}));
+    dialog.show();
+  }
+  private String birthdayDurationLabel(int seconds){
+    return seconds<60?seconds+" сек":seconds%60==0?(seconds/60)+" хв":(seconds/60)+" хв "+(seconds%60)+" сек";
+  }
+  private void birthdayTimePicker(String oldTime,Runnable onSaved){
+    LinearLayout wrapper=new LinearLayout(this);wrapper.setOrientation(LinearLayout.VERTICAL);
+    wrapper.setPadding(dp(18),dp(8),dp(18),dp(8));
+    TextView label=label("Години                         Хвилини",15,false);
+    label.setGravity(Gravity.CENTER);wrapper.addView(label);
+    LinearLayout wheels=new LinearLayout(this);wheels.setGravity(Gravity.CENTER);
+    NumberPicker hours=new NumberPicker(this),minutes=new NumberPicker(this);
+    hours.setMinValue(0);hours.setMaxValue(23);hours.setFormatter(v->String.format(Locale.US,"%02d",v));
+    minutes.setMinValue(0);minutes.setMaxValue(59);minutes.setFormatter(v->String.format(Locale.US,"%02d",v));
+    hours.setWrapSelectorWheel(true);minutes.setWrapSelectorWheel(true);
+    String initial=oldTime==null?"09:15":oldTime;
+    hours.setValue(Integer.parseInt(initial.substring(0,2)));
+    minutes.setValue(Integer.parseInt(initial.substring(3,5)));
+    wheels.addView(hours,new LinearLayout.LayoutParams(dp(105),dp(190)));
+    TextView colon=label(":",28,true);colon.setGravity(Gravity.CENTER);wheels.addView(colon);
+    wheels.addView(minutes,new LinearLayout.LayoutParams(dp(105),dp(190)));
+    wrapper.addView(wheels);
+    new AlertDialog.Builder(this).setTitle(oldTime==null?"Додати час":"Змінити час")
+      .setView(wrapper).setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{
+        String value=String.format(Locale.US,"%02d:%02d",hours.getValue(),minutes.getValue());
+        ArrayList<String> times=parseTimes(birthdayTimes());
+        if(oldTime!=null)times.remove(oldTime);
+        if(times.contains(value)){
+          Toast.makeText(this,"Цей час уже є в розкладі",Toast.LENGTH_LONG).show();return;
+        }
+        times.add(value);Collections.sort(times);
+        HashSet<String> disabled=disabledBirthdayTimes();if(oldTime!=null)disabled.remove(oldTime);
+        getPreferences(0).edit().putString("birthday_times",TextUtils.join(",",times))
+          .putString("birthday_disabled_times",TextUtils.join(",",disabled))
+          .putBoolean("birthday_hourly",false).apply();
+        onSaved.run();
       }).show();
   }
   private void checkBirthdays(){
     if(!enabled("birthdays")||siteOpen||birthdayShowing||dataFolder==null)return;
     Calendar c=Calendar.getInstance();int hour=c.get(Calendar.HOUR_OF_DAY),minute=c.get(Calendar.MINUTE);
     String hhmm=String.format(Locale.US,"%02d:%02d",hour,minute);
-    boolean scheduled=parseTimes(birthdayTimes()).contains(hhmm)||
-      (getPreferences(0).getBoolean("birthday_hourly",false)&&minute==0);
+    boolean scheduled=parseTimes(birthdayTimes()).contains(hhmm)&&!disabledBirthdayTimes().contains(hhmm);
     if(!scheduled)return;
     String key=todayKey()+"_"+hhmm;
     if(key.equals(lastBirthdaySlot)||getPreferences(0).getBoolean("birthday_shown_"+key,false))return;
@@ -1212,7 +1286,7 @@ public class MainActivity extends Activity {
       try{birthdayMusic.release();}catch(Exception ignored){}birthdayMusic=null;}
   }
   private void startBirthdayMusic(){
-    stopBirthdayMusic();if(!getPreferences(0).getBoolean("birthday_music",true))return;
+    stopBirthdayMusic();
     Uri uri=dataFile("birthday.mp3");if(uri==null)return;
     try{birthdayMusic=new MediaPlayer();birthdayMusic.setDataSource(this,uri);
       birthdayMusic.setLooping(true);
@@ -1274,7 +1348,7 @@ public class MainActivity extends Activity {
          target.addView(ageView,ap);
        }
      });
-    handler.postDelayed(this::showNextBirthday,60000);
+    handler.postDelayed(this::showNextBirthday,birthdayDisplaySeconds()*1000L);
   }
 
 
