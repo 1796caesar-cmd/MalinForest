@@ -29,6 +29,7 @@ import org.w3c.dom.*;
 import android.graphics.*;
 import android.graphics.drawable.*;
 import android.media.MediaPlayer;
+import android.media.AudioManager;
 import android.text.InputType;
 
 public class MainActivity extends Activity {
@@ -77,7 +78,9 @@ public class MainActivity extends Activity {
   private int topCursor=0;
   private FrameLayout birthdayOverlay;
   private boolean birthdayShowing=false;
-  private MediaPlayer birthdayMusic;
+  private MediaPlayer birthdayMusic, gameSound, currentVideoPlayer;
+  private final ArrayList<Boolean> birthdayDeferred=new ArrayList<>();
+  private boolean currentBirthdayDeferred=false;
   private String lastBirthdaySlot="";
   private final ArrayList<Person> birthdayQueue=new ArrayList<>();
   private int birthdayQueueIndex=0, categoryIndex=0;
@@ -467,7 +470,7 @@ public class MainActivity extends Activity {
     video.setVideoDimensions(0,0);video.setVideoURI(playlist.get(index%playlist.size()));
     video.setOnPreparedListener(mp->{video.setVideoDimensions(mp.getVideoWidth(),mp.getVideoHeight());
       if(!siteOpen){boolean sound=getPreferences(0).getBoolean("sound",false);
-        mp.setVolume(sound?1f:0f,sound?1f:0f);video.start();}});
+        currentVideoPlayer=mp;float v=getPreferences(0).getInt("video_volume",sound?100:0)/100f;mp.setVolume(v,v);video.start();}});
   }
   private void playNext(){if(playlist.isEmpty()||siteOpen)return;index=(index+1)%playlist.size();lastPosition=0;playCurrent();}
   private void showSite(){
@@ -538,12 +541,51 @@ public class MainActivity extends Activity {
       .setSingleChoiceItems(labels,selected,(d,w)->{timeout=values[w];getPreferences(0).edit().putInt("timeout",timeout).apply();d.dismiss();})
       .setNegativeButton("Скасувати",null).show();
   }
+  private void volumeSettings(){
+    LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);
+    layout.setPadding(dp(22),dp(12),dp(22),dp(8));
+    String[] names={"Відео","Ігри","Привітання"};
+    String[] keys={"video_volume","game_volume","birthday_volume"};
+    int[] defaults={getPreferences(0).getBoolean("sound",false)?100:0,70,50};
+    SeekBar[] bars=new SeekBar[3];
+    for(int i=0;i<3;i++){
+      final int slot=i;
+      TextView label=new TextView(this);label.setTextColor(Color.DKGRAY);
+      int value=getPreferences(0).getInt(keys[i],defaults[i]);
+      label.setText(names[i]+" — "+value+"%");layout.addView(label);
+      SeekBar bar=new SeekBar(this);bar.setMax(100);bar.setProgress(value);bars[i]=bar;layout.addView(bar);
+      bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+        public void onProgressChanged(SeekBar b,int progress,boolean user){label.setText(names[slot]+" — "+progress+"%");}
+        public void onStartTrackingTouch(SeekBar b){}
+        public void onStopTrackingTouch(SeekBar b){}
+      });
+    }
+    new AlertDialog.Builder(this).setTitle("Регулювання звуку").setView(layout)
+      .setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{
+        android.content.SharedPreferences.Editor edit=getPreferences(0).edit();
+        for(int i=0;i<3;i++)edit.putInt(keys[i],bars[i].getProgress());edit.apply();
+        if(currentVideoPlayer!=null){float v=bars[0].getProgress()/100f;
+          try{currentVideoPlayer.setVolume(v,v);}catch(Exception ignored){}}
+        if(birthdayMusic!=null){float v=bars[2].getProgress()/100f;
+          try{birthdayMusic.setVolume(v,v);}catch(Exception ignored){}}
+      }).show();
+  }
+  private void stopGameSound(){if(gameSound!=null){try{gameSound.stop();}catch(Exception ignored){}
+    try{gameSound.release();}catch(Exception ignored){}gameSound=null;}}
+  private void playGameSound(boolean correct){
+    stopGameSound();Uri file=gameFile("Games",correct?"correct.mp3":"wrong.mp3");if(file==null)return;
+    try{MediaPlayer mp=new MediaPlayer();gameSound=mp;mp.setDataSource(this,file);
+      float v=getPreferences(0).getInt("game_volume",70)/100f;mp.setVolume(v,v);
+      mp.setOnCompletionListener(done->{if(gameSound==done)stopGameSound();});
+      mp.prepare();mp.start();
+    }catch(Exception ex){stopGameSound();}
+  }
   private void settings(){
-    boolean sound=getPreferences(0).getBoolean("sound",false),stretch=getPreferences(0).getBoolean("stretch_video",true);
+    boolean stretch=getPreferences(0).getBoolean("stretch_video",true);
     String[] opts={"Вибрати папку з відео","Вибрати папку з файлами (MalinForest)","Відображення елементів",
       "Розклад привітань і мелодія","Час бездіяльності","Таймер бездіяльності у грі",
       "Час зміни верхньої панелі","Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),
-      "Звук відео: "+(sound?"увімкнений":"вимкнений"),"Оновити список відео",
+      "Регулювання звуку","Оновити список відео",
       "Оновити свята та новини","Перечитати Excel"};
     new AlertDialog.Builder(this).setTitle("Налаштування MalinForest").setItems(opts,(d,w)->{
       if(w==0)chooseFolder();
@@ -555,8 +597,7 @@ public class MainActivity extends Activity {
       if(w==6)topIntervalSettings();
       if(w==7){boolean enabled=!getPreferences(0).getBoolean("stretch_video",true);
         getPreferences(0).edit().putBoolean("stretch_video",enabled).apply();video.setStretchMode(enabled);}
-      if(w==8){boolean on=!getPreferences(0).getBoolean("sound",false);
-        getPreferences(0).edit().putBoolean("sound",on).apply();}
+      if(w==8)volumeSettings();
       if(w==9&&folder!=null)loadFolder(folder,true);
       if(w==10){loadHolidays();loadNews();}
       if(w==11)loadData();
@@ -856,7 +897,7 @@ public class MainActivity extends Activity {
     if(!siteOpen&&video!=null&&!playlist.isEmpty()&&!video.isPlaying())video.start();}
   @Override protected void onPause(){if(video!=null&&video.isPlaying())video.pause();super.onPause();}
   @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);
-    handler.removeCallbacks(gameIdle);handler.removeCallbacks(tickerFrame);if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();stopBirthdayMusic();super.onDestroy();}
+    handler.removeCallbacks(gameIdle);handler.removeCallbacks(tickerFrame);if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();stopBirthdayMusic();stopGameSound();super.onDestroy();}
   // Ігри читають картинки з уже вибраної папки MalinForest через SAF.
   private Uri gameFile(String... parts){
     if(dataFolder==null)return null;
@@ -912,7 +953,7 @@ public class MainActivity extends Activity {
     gameResetIdle();
   }
   private void closeGames(){
-    handler.removeCallbacks(gameIdle);
+    handler.removeCallbacks(gameIdle);stopGameSound();
     if(gameOverlay!=null){root.removeView(gameOverlay);gameOverlay=null;}
     gameMode=-1;gameTimerLabel=null;gameFinished=false;gameBusy=false;
     if(topPanel!=null)topPanel.setVisibility(View.VISIBLE);
@@ -1023,7 +1064,7 @@ public class MainActivity extends Activity {
   }
   private void gameAnswer(boolean correct,String item,TextView feedback){
     if(gameBusy||gameFinished)return;
-    gameBusy=true;
+    gameBusy=true;playGameSound(correct);
     if(correct){
       feedback.setText("Вірно! 🎉");feedback.setTextColor(0xFFB8FF92);
       for(int i=0;i<15;i++){
@@ -1129,15 +1170,12 @@ public class MainActivity extends Activity {
     EditText times=new EditText(this);times.setSingleLine(false);times.setText(birthdayTimes());layout.addView(times);
     CheckBox hourly=new CheckBox(this);hourly.setText("Додатково показувати щогодини (о ХХ:00)");hourly.setChecked(getPreferences(0).getBoolean("birthday_hourly",false));layout.addView(hourly);
     CheckBox music=new CheckBox(this);music.setText("Мелодія привітання (birthday.mp3)");music.setChecked(getPreferences(0).getBoolean("birthday_music",true));layout.addView(music);
-    TextView vol=label("Гучність мелодії",15,false);vol.setTextColor(Color.DKGRAY);layout.addView(vol);
-    SeekBar volume=new SeekBar(this);volume.setMax(100);volume.setProgress(getPreferences(0).getInt("birthday_volume",50));layout.addView(volume);
     new AlertDialog.Builder(this).setTitle("Привітання іменинників").setView(layout)
       .setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{
         String raw=times.getText().toString().replace(';',',').replace('\n',',');ArrayList<String> list=parseTimes(raw);
         if(!raw.trim().isEmpty()&&list.size()!=raw.split(",").length){Toast.makeText(this,"Деякі значення часу неправильні — їх пропущено",Toast.LENGTH_LONG).show();}
         getPreferences(0).edit().putString("birthday_times",TextUtils.join(",",list))
-          .putBoolean("birthday_hourly",hourly.isChecked()).putBoolean("birthday_music",music.isChecked())
-          .putInt("birthday_volume",volume.getProgress()).apply();
+          .putBoolean("birthday_hourly",hourly.isChecked()).putBoolean("birthday_music",music.isChecked()).apply();
         if(!music.isChecked())stopBirthdayMusic();
       }).show();
   }
@@ -1150,8 +1188,20 @@ public class MainActivity extends Activity {
     if(!scheduled)return;
     String key=todayKey()+"_"+hhmm;
     if(key.equals(lastBirthdaySlot)||getPreferences(0).getBoolean("birthday_shown_"+key,false))return;
-    birthdayQueue.clear();int day=c.get(Calendar.DAY_OF_MONTH),month=c.get(Calendar.MONTH)+1;
-    for(Person p:people)if(p.day==day&&p.month==month&&isManagement(p))birthdayQueue.add(p);
+    birthdayQueue.clear();birthdayDeferred.clear();
+    // On Monday, include both weekend dates; check actual month/year boundaries.
+    ArrayList<Calendar> dates=new ArrayList<>();
+    Calendar today=(Calendar)c.clone();dates.add(today);
+    if(c.get(Calendar.DAY_OF_WEEK)==Calendar.MONDAY){
+      Calendar sat=(Calendar)c.clone();sat.add(Calendar.DAY_OF_YEAR,-2);dates.add(sat);
+      Calendar sun=(Calendar)c.clone();sun.add(Calendar.DAY_OF_YEAR,-1);dates.add(sun);
+    }
+    // Do not show Saturday/Sunday cards on weekends; move them to Monday.
+    if(c.get(Calendar.DAY_OF_WEEK)==Calendar.SATURDAY||c.get(Calendar.DAY_OF_WEEK)==Calendar.SUNDAY)return;
+    for(Calendar date:dates)for(Person p:people)
+      if(p.day==date.get(Calendar.DAY_OF_MONTH)&&p.month==date.get(Calendar.MONTH)+1&&isManagement(p)){
+        birthdayQueue.add(p);birthdayDeferred.add(!date.equals(today));
+      }
     if(birthdayQueue.isEmpty())return;
     lastBirthdaySlot=key;
     getPreferences(0).edit().putBoolean("birthday_shown_"+key,true).apply();
@@ -1175,6 +1225,7 @@ public class MainActivity extends Activity {
       stopBirthdayMusic();birthdayShowing=false;if(!siteOpen&&video!=null&&!playlist.isEmpty())video.start();return;}
     birthdayShowing=true;if(video!=null&&video.isPlaying())video.pause();
     startBirthdayMusic();
+    currentBirthdayDeferred=birthdayDeferred.size()>birthdayQueueIndex&&birthdayDeferred.get(birthdayQueueIndex);
     Person p=birthdayQueue.get(birthdayQueueIndex++);int age=Calendar.getInstance().get(Calendar.YEAR)-p.year;
     boolean jubilee=age>=25&&age%5==0;
     if(birthdayOverlay!=null)root.removeView(birthdayOverlay);
@@ -1202,6 +1253,17 @@ public class MainActivity extends Activity {
        FrameLayout.LayoutParams np=new FrameLayout.LayoutParams(Math.round(bw*scale),Math.round(bh*scale));
        np.leftMargin=Math.round(left+x*scale);np.topMargin=Math.round(top+y*scale);
        target.addView(name,np);
+       if(currentBirthdayDeferred){
+         String[] months={"січня","лютого","березня","квітня","травня","червня","липня","серпня","вересня","жовтня","листопада","грудня"};
+         TextView actualDate=label("День народження — "+p.day+" "+months[p.month-1],20,true);
+         actualDate.setBackgroundColor(Color.TRANSPARENT);actualDate.setTextColor(0xFF755020);
+         actualDate.setGravity(Gravity.CENTER);
+         actualDate.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,37*scale);
+         FrameLayout.LayoutParams dpDate=new FrameLayout.LayoutParams(Math.round(850*scale),Math.round(68*scale));
+         dpDate.leftMargin=Math.round(left+(jubilee?495:600)*scale);
+         dpDate.topMargin=Math.round(top+(jubilee?625:590)*scale);
+         target.addView(actualDate,dpDate);
+       }
        if(jubilee){
          TextView ageView=label(age+" років",28,true);
          ageView.setBackgroundColor(Color.TRANSPARENT);
