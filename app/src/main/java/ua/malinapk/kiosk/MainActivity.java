@@ -78,7 +78,10 @@ public class MainActivity extends Activity {
   private int topCursor=0;
   private FrameLayout birthdayOverlay;
   private boolean birthdayShowing=false;
-  private MediaPlayer birthdayMusic, gameSound, currentVideoPlayer;
+  private MediaPlayer birthdayMusic, gameSound, currentVideoPlayer, silenceSound;
+  private FrameLayout silenceOverlay;
+  private boolean silenceActive=false, silencePausedBirthday=false;
+  private String lastSilenceDay="";
   private final ArrayList<Boolean> birthdayDeferred=new ArrayList<>();
   private boolean currentBirthdayDeferred=false;
   private String lastBirthdaySlot="";
@@ -96,7 +99,7 @@ public class MainActivity extends Activity {
   private boolean anyTicker(){return enabled("news")||enabled("facts");}
 
   private final Runnable idle=()->{if(siteOpen&&System.currentTimeMillis()-lastTouch>=timeout)showVideo();};
-  private final Runnable tick=new Runnable(){@Override public void run(){updateClock();handler.postDelayed(this,1000);}};
+  private final Runnable tick=new Runnable(){@Override public void run(){updateClock();checkSilence();handler.postDelayed(this,1000);}};
   private final Runnable refresh=new Runnable(){@Override public void run(){
     if(folder!=null)loadFolder(folder,false);
     loadWeather();loadNews();loadHolidays();if(dataFolder!=null)loadData();
@@ -541,14 +544,80 @@ public class MainActivity extends Activity {
       .setSingleChoiceItems(labels,selected,(d,w)->{timeout=values[w];getPreferences(0).edit().putInt("timeout",timeout).apply();d.dismiss();})
       .setNegativeButton("Скасувати",null).show();
   }
+  private void silenceSettings(){
+    LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);
+    layout.setPadding(dp(22),dp(12),dp(22),dp(10));
+    CheckBox enabledBox=new CheckBox(this);enabledBox.setText("Увімкнути хвилину мовчання");
+    enabledBox.setChecked(getPreferences(0).getBoolean("silence_enabled",true));layout.addView(enabledBox);
+    TextView time=new TextView(this);time.setTextColor(Color.DKGRAY);time.setTextSize(21);
+    String saved=getPreferences(0).getString("silence_time","09:00");time.setText("Час початку: "+saved);
+    time.setPadding(0,dp(18),0,dp(18));layout.addView(time);
+    final String[] chosen={saved};
+    time.setOnClickListener(v->{String[] parts=chosen[0].split(":");
+      new TimePickerDialog(this,(picker,h,m)->{chosen[0]=String.format(Locale.US,"%02d:%02d",h,m);time.setText("Час початку: "+chosen[0]);},
+        Integer.parseInt(parts[0]),Integer.parseInt(parts[1]),true).show();});
+    TextView info=new TextView(this);info.setText("Тривалість: 60 секунд\nНа весь екран з’являється пам’ятне зображення, лунає цокання. Інші звуки MalinForest призупиняються.");
+    info.setTextColor(Color.DKGRAY);layout.addView(info);
+    new AlertDialog.Builder(this).setTitle("Хвилина мовчання").setView(layout)
+      .setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{
+        getPreferences(0).edit().putBoolean("silence_enabled",enabledBox.isChecked()).putString("silence_time",chosen[0]).apply();
+        checkSilence();
+      }).show();
+  }
+  private void checkSilence(){
+    Calendar now=Calendar.getInstance();String today=todayKey();
+    String[] parts=getPreferences(0).getString("silence_time","09:00").split(":");
+    int start=Integer.parseInt(parts[0])*60+Integer.parseInt(parts[1]);
+    int current=now.get(Calendar.HOUR_OF_DAY)*60+now.get(Calendar.MINUTE);
+    boolean within=getPreferences(0).getBoolean("silence_enabled",true)&&current==start;
+    if(silenceActive){if(!within||!today.equals(lastSilenceDay))endSilence();return;}
+    if(within&&!today.equals(lastSilenceDay))startSilence(today);
+  }
+  private void startSilence(String today){
+    if(root==null)return;
+    lastSilenceDay=today;silenceActive=true;
+    silencePausedBirthday=birthdayMusic!=null;
+    if(birthdayMusic!=null)try{birthdayMusic.pause();}catch(Exception ignored){}
+    if(video!=null&&video.isPlaying())video.pause();
+    if(gameSound!=null)try{gameSound.pause();}catch(Exception ignored){}
+    if(web!=null)web.onPause();
+    silenceOverlay=new FrameLayout(this);silenceOverlay.setBackgroundColor(Color.BLACK);
+    ImageView image=new ImageView(this);
+    Uri customImage=gameFile("silence.png");
+    if(customImage!=null)try{image.setImageURI(customImage);}catch(Exception ignored){image.setImageResource(R.drawable.silence_memorial);}
+    else image.setImageResource(R.drawable.silence_memorial);
+    image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+    silenceOverlay.addView(image,new FrameLayout.LayoutParams(-1,-1));
+    root.addView(silenceOverlay,new FrameLayout.LayoutParams(-1,-1));
+    try{
+      Uri customSound=gameFile("silence.mp3");
+      if(customSound!=null){
+        try{silenceSound=new MediaPlayer();silenceSound.setDataSource(this,customSound);silenceSound.prepare();}
+        catch(Exception e){stopSilenceSound();silenceSound=MediaPlayer.create(this,R.raw.silence_tick);}
+      }else silenceSound=MediaPlayer.create(this,R.raw.silence_tick);
+      if(silenceSound!=null){silenceSound.setLooping(true);float v=getPreferences(0).getInt("silence_volume",50)/100f;
+        silenceSound.setVolume(v,v);silenceSound.start();}}
+    catch(Exception ignored){stopSilenceSound();}
+  }
+  private void stopSilenceSound(){if(silenceSound!=null){try{silenceSound.stop();}catch(Exception ignored){}
+    try{silenceSound.release();}catch(Exception ignored){}silenceSound=null;}}
+  private void endSilence(){
+    if(!silenceActive)return;silenceActive=false;stopSilenceSound();
+    if(silenceOverlay!=null){root.removeView(silenceOverlay);silenceOverlay=null;}
+    if(web!=null)web.onResume();
+    if(silencePausedBirthday&&birthdayMusic!=null)try{birthdayMusic.start();}catch(Exception ignored){}
+    silencePausedBirthday=false;
+    if(gameSound!=null)try{gameSound.start();}catch(Exception ignored){}
+    if(!siteOpen&&!birthdayShowing&&video!=null&&!playlist.isEmpty())try{video.start();}catch(Exception ignored){}
+  }
   private void volumeSettings(){
     LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);
     layout.setPadding(dp(22),dp(12),dp(22),dp(8));
-    String[] names={"Відео","Ігри","Привітання"};
-    String[] keys={"video_volume","game_volume","birthday_volume"};
-    int[] defaults={getPreferences(0).getBoolean("sound",false)?100:0,70,50};
-    SeekBar[] bars=new SeekBar[3];
-    for(int i=0;i<3;i++){
+    String[] names={"Відео","Ігри","Привітання","Хвилина мовчання"};
+    String[] keys={"video_volume","game_volume","birthday_volume","silence_volume"};
+    int[] defaults={getPreferences(0).getBoolean("sound",false)?100:0,70,50,50};
+    SeekBar[] bars=new SeekBar[4];
+    for(int i=0;i<4;i++){
       final int slot=i;
       TextView label=new TextView(this);label.setTextColor(Color.DKGRAY);
       int value=getPreferences(0).getInt(keys[i],defaults[i]);
@@ -563,9 +632,10 @@ public class MainActivity extends Activity {
     new AlertDialog.Builder(this).setTitle("Регулювання звуку").setView(layout)
       .setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{
         android.content.SharedPreferences.Editor edit=getPreferences(0).edit();
-        for(int i=0;i<3;i++)edit.putInt(keys[i],bars[i].getProgress());edit.apply();
+        for(int i=0;i<4;i++)edit.putInt(keys[i],bars[i].getProgress());edit.apply();
         if(currentVideoPlayer!=null){float v=bars[0].getProgress()/100f;
           try{currentVideoPlayer.setVolume(v,v);}catch(Exception ignored){}}
+        if(silenceSound!=null){float v=bars[3].getProgress()/100f;try{silenceSound.setVolume(v,v);}catch(Exception ignored){}}
         if(birthdayMusic!=null){float v=bars[2].getProgress()/100f;
           try{birthdayMusic.setVolume(v,v);}catch(Exception ignored){}}
       }).show();
@@ -585,7 +655,7 @@ public class MainActivity extends Activity {
     String[] opts={"Вибрати папку з відео","Вибрати папку з файлами (MalinForest)","Відображення елементів",
       "Розклад привітань","Час бездіяльності","Таймер бездіяльності у грі",
       "Час зміни верхньої панелі","Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),
-      "Регулювання звуку","Оновити список відео",
+      "Регулювання звуку","Хвилина мовчання","Оновити список відео",
       "Оновити свята та новини","Перечитати Excel"};
     new AlertDialog.Builder(this).setTitle("Налаштування MalinForest").setItems(opts,(d,w)->{
       if(w==0)chooseFolder();
@@ -598,9 +668,10 @@ public class MainActivity extends Activity {
       if(w==7){boolean enabled=!getPreferences(0).getBoolean("stretch_video",true);
         getPreferences(0).edit().putBoolean("stretch_video",enabled).apply();video.setStretchMode(enabled);}
       if(w==8)volumeSettings();
-      if(w==9&&folder!=null)loadFolder(folder,true);
-      if(w==10){loadHolidays();loadNews();}
-      if(w==11)loadData();
+      if(w==9)silenceSettings();
+      if(w==10&&folder!=null)loadFolder(folder,true);
+      if(w==11){loadHolidays();loadNews();}
+      if(w==12)loadData();
     }).show();
   }
   @Override protected void onActivityResult(int request,int result,Intent data){
@@ -894,10 +965,10 @@ public class MainActivity extends Activity {
   private String symbol(int code){if(code==0)return "☀";if(code<=3)return "⛅";if(code<=48)return "☁";if(code<=67)return "🌧";if(code<=77)return "❄";return "🌦";}
   @Override public void onBackPressed(){if(gameOverlay!=null){closeGames();return;}if(siteOpen){if(web.canGoBack()&&!"about:blank".equals(web.getUrl()))web.goBack();else showVideo();}else settings();}
   @Override protected void onResume(){super.onResume();immersive();
-    if(!siteOpen&&video!=null&&!playlist.isEmpty()&&!video.isPlaying())video.start();}
+    if(!silenceActive&&!siteOpen&&video!=null&&!playlist.isEmpty()&&!video.isPlaying())video.start();}
   @Override protected void onPause(){if(video!=null&&video.isPlaying())video.pause();super.onPause();}
   @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);
-    handler.removeCallbacks(gameIdle);handler.removeCallbacks(tickerFrame);if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();stopBirthdayMusic();stopGameSound();super.onDestroy();}
+    endSilence();handler.removeCallbacks(gameIdle);handler.removeCallbacks(tickerFrame);if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();stopBirthdayMusic();stopGameSound();super.onDestroy();}
   // Ігри читають картинки з уже вибраної папки MalinForest через SAF.
   private Uri gameFile(String... parts){
     if(dataFolder==null)return null;
@@ -1255,7 +1326,7 @@ public class MainActivity extends Activity {
       }).show();
   }
   private void checkBirthdays(){
-    if(!enabled("birthdays")||siteOpen||birthdayShowing||dataFolder==null)return;
+    if(silenceActive||!enabled("birthdays")||siteOpen||birthdayShowing||dataFolder==null)return;
     Calendar c=Calendar.getInstance();int hour=c.get(Calendar.HOUR_OF_DAY),minute=c.get(Calendar.MINUTE);
     String hhmm=String.format(Locale.US,"%02d:%02d",hour,minute);
     boolean scheduled=parseTimes(birthdayTimes()).contains(hhmm)&&!disabledBirthdayTimes().contains(hhmm);
