@@ -31,8 +31,14 @@ import android.graphics.drawable.*;
 import android.media.MediaPlayer;
 import android.media.AudioManager;
 import android.text.InputType;
+import android.content.pm.PackageManager;
+import android.os.Environment;
+import android.provider.Settings;
 
 public class MainActivity extends Activity {
+  private static final String RELEASE_API="https://api.github.com/repos/1796caesar-cmd/MalinForest/releases/latest";
+  private long updateDownloadId=-1;
+  private BroadcastReceiver updateReceiver;
   private static final String SITE="https://malinapk.net/";
   private static final String WEATHER_URL="https://api.open-meteo.com/v1/forecast?latitude=50.77&longitude=29.24&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code&timezone=Europe%2FKyiv&forecast_days=2";
   private static final String[] NEWS_URLS={"https://www.openforest.org.ua/feed/", "https://www.openforest.org.ua/section/news/feed/"};
@@ -780,13 +786,124 @@ public class MainActivity extends Activity {
       .setNegativeButton("Скасувати",null).show();
   }
 
+  private String appVersion(){
+    try{return getPackageManager().getPackageInfo(getPackageName(),0).versionName;}
+    catch(Exception e){return "невідома";}
+  }
+  private int compareVersions(String a,String b){
+    String[] x=a.replaceFirst("^[vV]","").split("\\.");
+    String[] y=b.replaceFirst("^[vV]","").split("\\.");
+    for(int i=0;i<Math.max(x.length,y.length);i++){
+      int n=0,m=0;
+      try{if(i<x.length)n=Integer.parseInt(x[i].replaceAll("[^0-9].*$",""));}catch(Exception ignored){}
+      try{if(i<y.length)m=Integer.parseInt(y[i].replaceAll("[^0-9].*$",""));}catch(Exception ignored){}
+      if(n!=m)return Integer.compare(n,m);
+    }
+    return 0;
+  }
+  private void updateSettings(){
+    new AlertDialog.Builder(this).setTitle("Оновлення MalinForest")
+      .setMessage("Встановлена версія: "+appVersion()+"\n\nОновлення перевіряються у GitHub Releases. Потрібен інтернет.")
+      .setPositiveButton("Перевірити оновлення",(d,w)->checkForUpdate())
+      .setNegativeButton("Закрити",null).show();
+  }
+  private void checkForUpdate(){
+    final ProgressDialog progress=ProgressDialog.show(this,"Оновлення MalinForest","Перевіряємо наявність нової версії…",true,false);
+    new Thread(()->{
+      String version=null,url=null,error=null;
+      try{
+        HttpURLConnection c=(HttpURLConnection)new URL(RELEASE_API).openConnection();
+        c.setConnectTimeout(12000);c.setReadTimeout(12000);
+        c.setRequestProperty("Accept","application/vnd.github+json");
+        c.setRequestProperty("User-Agent","MalinForest-Android-Updater");
+        try{
+          if(c.getResponseCode()!=200)throw new IOException("GitHub HTTP "+c.getResponseCode());
+          ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+          try(InputStream in=c.getInputStream()){
+            byte[] buf=new byte[8192];int n;
+            while((n=in.read(buf))!=-1){bytes.write(buf,0,n);if(bytes.size()>512*1024)throw new IOException("Завелика відповідь сервера");}
+          }
+          JSONObject release=new JSONObject(bytes.toString("UTF-8"));
+          version=release.optString("tag_name","").replaceFirst("^[vV]","");
+          if(!version.matches("[0-9]+(\\.[0-9]+)*"))throw new IOException("Некоректна версія релізу");
+          JSONArray assets=release.optJSONArray("assets");
+          if(assets!=null)for(int i=0;i<assets.length();i++){
+            JSONObject asset=assets.getJSONObject(i);
+            String name=asset.optString("name","");
+            if(name.equals("MalinForest-v"+version+".apk")){
+              url=asset.optString("browser_download_url","");break;
+            }
+          }
+          if(url!=null&&!url.startsWith("https://github.com/1796caesar-cmd/MalinForest/releases/download/"))url=null;
+        }finally{c.disconnect();}
+      }catch(Exception e){error=e.getMessage();}
+      final String latest=version,apkUrl=url,problem=error;
+      runOnUiThread(()->{
+        if(isFinishing())return;
+        progress.dismiss();
+        if(problem!=null){new AlertDialog.Builder(this).setTitle("Помилка перевірки")
+          .setMessage("Не вдалося перевірити оновлення.\n"+problem).setPositiveButton("OK",null).show();return;}
+        if(compareVersions(latest,appVersion())<=0){new AlertDialog.Builder(this)
+          .setTitle("Оновлень немає").setMessage("Встановлено останню версію: "+appVersion())
+          .setPositiveButton("OK",null).show();return;}
+        if(apkUrl==null){new AlertDialog.Builder(this).setTitle("Доступна версія "+latest)
+          .setMessage("У GitHub Releases поки немає APK для цієї версії.")
+          .setPositiveButton("OK",null).show();return;}
+        new AlertDialog.Builder(this).setTitle("Доступна нова версія "+latest)
+          .setMessage("Встановлена: "+appVersion()+"\nНова: "+latest+"\n\nЗавантажити APK та запустити встановлення?")
+          .setPositiveButton("Завантажити та встановити",(d,w)->downloadUpdate(apkUrl,latest))
+          .setNegativeButton("Пізніше",null).show();
+      });
+    }).start();
+  }
+  private void downloadUpdate(String url,String version){
+    try{
+      android.app.DownloadManager manager=(android.app.DownloadManager)getSystemService(DOWNLOAD_SERVICE);
+      android.app.DownloadManager.Request request=new android.app.DownloadManager.Request(Uri.parse(url));
+      request.setTitle("MalinForest v"+version);
+      request.setDescription("Оновлення MalinForest");
+      request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+      request.setMimeType("application/vnd.android.package-archive");
+      request.setDestinationInExternalFilesDir(this,Environment.DIRECTORY_DOWNLOADS,"MalinForest-v"+version+".apk");
+      updateDownloadId=manager.enqueue(request);
+      Toast.makeText(this,"Завантаження оновлення розпочато",Toast.LENGTH_LONG).show();
+      if(updateReceiver!=null){try{unregisterReceiver(updateReceiver);}catch(Exception ignored){}}
+      updateReceiver=new BroadcastReceiver(){@Override public void onReceive(Context context,Intent intent){
+        if(intent.getLongExtra(android.app.DownloadManager.EXTRA_DOWNLOAD_ID,-1)!=updateDownloadId)return;
+        android.app.DownloadManager.Query q=new android.app.DownloadManager.Query().setFilterById(updateDownloadId);
+        try(Cursor cursor=manager.query(q)){
+          if(cursor!=null&&cursor.moveToFirst()){
+            int status=cursor.getInt(cursor.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_STATUS));
+            if(status==android.app.DownloadManager.STATUS_SUCCESSFUL){
+              Uri apk=manager.getUriForDownloadedFile(updateDownloadId);
+              if(apk!=null)installUpdate(apk);
+            }else Toast.makeText(MainActivity.this,"Не вдалося завантажити APK",Toast.LENGTH_LONG).show();
+          }
+        }catch(Exception e){Toast.makeText(MainActivity.this,"Помилка завантаження: "+e.getMessage(),Toast.LENGTH_LONG).show();}
+        try{unregisterReceiver(this);}catch(Exception ignored){}updateReceiver=null;
+      }};
+      registerReceiver(updateReceiver,new IntentFilter(android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE));
+    }catch(Exception e){new AlertDialog.Builder(this).setTitle("Помилка завантаження")
+      .setMessage(e.getMessage()).setPositiveButton("OK",null).show();}
+  }
+  private void installUpdate(Uri apk){
+    try{
+      Intent install=new Intent(Intent.ACTION_VIEW);
+      install.setDataAndType(apk,"application/vnd.android.package-archive");
+      install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_ACTIVITY_NEW_TASK);
+      startActivity(install);
+    }catch(Exception e){new AlertDialog.Builder(this).setTitle("Встановлення оновлення")
+      .setMessage("Не вдалося відкрити встановлення APK. Перевірте дозвіл на встановлення з цього джерела.\n"+e.getMessage())
+      .setPositiveButton("OK",null).show();}
+  }
+
   private void settings(){
     boolean stretch=getPreferences(0).getBoolean("stretch_video",true);
     String[] opts={"Вибрати папку з відео","Вибрати папку з файлами (MalinForest)","Відображення елементів",
       "Розклад привітань","Час бездіяльності","Таймер бездіяльності у грі",
       "Час зміни верхньої панелі","Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),
       "Регулювання звуку","Хвилина мовчання","Налаштування карти","Оновити список відео",
-      "Оновити свята та новини","Перечитати Excel"};
+      "Оновити свята та новини","Перечитати Excel","Оновлення додатка"};
     new AlertDialog.Builder(this).setTitle("Налаштування MalinForest").setItems(opts,(d,w)->{
       if(w==0)chooseFolder();
       if(w==1)chooseDataFolder();
@@ -803,6 +920,7 @@ public class MainActivity extends Activity {
       if(w==11&&folder!=null)loadFolder(folder,true);
       if(w==12){loadHolidays();loadNews();}
       if(w==13)loadData();
+      if(w==14)updateSettings();
     }).show();
   }
   @Override protected void onActivityResult(int request,int result,Intent data){
