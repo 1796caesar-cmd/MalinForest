@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -44,7 +46,9 @@ jobs:
           MALINFOREST_KEY_ALIAS: ${{ secrets.MALINFOREST_KEY_ALIAS }}
           MALINFOREST_KEY_PASSWORD: ${{ secrets.MALINFOREST_KEY_PASSWORD }}
           MALINFOREST_VERSION_CODE: ${{ github.run_number }}
-        run: gradle assembleRelease --stacktrace
+          MALINFOREST_VERSION_NAME: '1.6'
+        run: |
+          gradle assembleRelease --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -52,3 +56,34 @@ jobs:
           name: MalinForest-signed-APK
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      - name: Publish or update GitHub Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/release/*.apk)
+          if (( ${#apks[@]} != 1 )); then
+            echo "Expected exactly one APK, found ${#apks[@]}" >&2
+            exit 1
+          fi
+          apk="${apks[0]}"
+          filename="$(basename "$apk")"
+          if [[ ! "$filename" =~ ^MalinForest-v([0-9]+\.[0-9]+(\.[0-9]+)*)\.apk$ ]]; then
+            echo "Unexpected APK filename: $filename" >&2
+            exit 1
+          fi
+          version="${BASH_REMATCH[1]}"
+          tag="v${version}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk" --clobber
+          else
+            gh release create "$tag" "$apk" \
+              --target "$GITHUB_SHA" \
+              --title "MalinForest $tag" \
+              --notes "Автоматичний реліз MalinForest $tag" \
+              --latest
+          fi
