@@ -655,7 +655,31 @@ public class MainActivity extends Activity {
     }catch(Exception ex){stopGameSound();}
   }
 
-  // Віджет офіційної карти. Статус громади НЕ виводиться без перевіреного API.
+  // Незалежні вебкарти: джерело вибирає користувач, без автоматичних звукових сигналів.
+  private static final String[] ALERT_SOURCE_NAMES={
+    "Alerts.in.ua — спрощена (рекомендовано)",
+    "Alerts.in.ua — повна",
+    "UkraineAlarm — офіційна карта",
+    "AlarmMap.online",
+    "War Monitor — карта загроз",
+    "DIMAP.LIVE — карта тривог"
+  };
+  private static final String[] ALERT_SOURCE_URLS={
+    "https://alerts.in.ua/lite",
+    "https://alerts.in.ua/",
+    "https://map.ukrainealarm.com/",
+    "https://alarmmap.online/",
+    "https://map.war-monitor.org/",
+    "https://dimap.live/"
+  };
+  private int alertSource(){return Math.max(0,Math.min(ALERT_SOURCE_URLS.length-1,getPreferences(0).getInt("alert_source",0)));}
+  private void loadAlertSource(){
+    if(alertWeb==null)return;
+    int selected=alertSource();
+    if(alertCaption!=null)alertCaption.setText("Карта тривог · "+ALERT_SOURCE_NAMES[selected]);
+    String url=ALERT_SOURCE_URLS[selected];
+    if(!url.equals(alertWeb.getUrl()))alertWeb.loadUrl(url);
+  }
   private int alertInterval(){return getPreferences(0).getInt("alert_interval",30);}
   private final Runnable alertRefresh=new Runnable(){@Override public void run(){
     if(alertWeb!=null && alertTile!=null && alertTile.getVisibility()==View.VISIBLE){
@@ -682,7 +706,7 @@ public class MainActivity extends Activity {
     alertWeb.getSettings().setDomStorageEnabled(true);
     alertWeb.setWebViewClient(new WebViewClient());
     alertTile.addView(alertWeb,new FrameLayout.LayoutParams(-1,-1));
-    alertCaption=label("Карта України · дані з map.ukrainealarm.com",11,true);
+    alertCaption=label("Карта повітряних тривог",11,true);
     alertCaption.setGravity(Gravity.CENTER);alertCaption.setBackgroundColor(0xB9000000);
     alertTile.addView(alertCaption,new FrameLayout.LayoutParams(-1,dp(27),Gravity.BOTTOM));
     TextView edit=label("✥",24,true);edit.setGravity(Gravity.CENTER);edit.setBackground(bg(0xDD355A48,8));
@@ -709,8 +733,7 @@ public class MainActivity extends Activity {
     alertWeb.setOnLongClickListener(toggleEdit);
     root.addView(alertTile,alertLayout());
     applyAlertAppearance();
-    alertWeb.loadUrl("https://map.ukrainealarm.com/");
-    handler.postDelayed(alertRefresh,alertInterval()*1000L);
+    loadAlertSource();
   }
   private void applyAlertAppearance(){
     if(alertTile==null)return;
@@ -727,12 +750,13 @@ public class MainActivity extends Activity {
     android.content.SharedPreferences prefs=getPreferences(0);
     LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(dp(22),dp(12),dp(22),dp(12));
     CheckBox visible=new CheckBox(this);visible.setText("Показувати карту");visible.setChecked(prefs.getBoolean("alert_visible",true));box.addView(visible);
-    CheckBox full=new CheckBox(this);full.setText("Автоматично на весь екран під час тривоги");full.setChecked(prefs.getBoolean("alert_fullscreen",false));full.setEnabled(false);box.addView(full);
-    TextView notice=label("Автоматичне розгортання потребує офіційного API-ключа. Поки що недоступне.",12,false);notice.setTextColor(Color.DKGRAY);box.addView(notice);
-    TextView region=new TextView(this);region.setText("Регіон: "+prefs.getString("alert_region","Малинська територіальна громада"));region.setTextSize(16);region.setPadding(0,dp(14),0,dp(14));box.addView(region);
-    region.setOnClickListener(v->{EditText name=new EditText(this);name.setSingleLine(true);name.setText(prefs.getString("alert_region","Малинська територіальна громада"));
-      new AlertDialog.Builder(this).setTitle("Регіон (назва для майбутнього API)").setView(name)
-      .setPositiveButton("Зберегти",(d,w)->{String r=name.getText().toString().trim();if(!r.isEmpty()){prefs.edit().putString("alert_region",r).apply();region.setText("Регіон: "+r);}}).setNegativeButton("Скасувати",null).show();});
+    TextView sourceTitle=new TextView(this);sourceTitle.setText("Джерело карти");sourceTitle.setTextSize(16);
+    sourceTitle.setPadding(0,dp(14),0,0);box.addView(sourceTitle);
+    Spinner sources=new Spinner(this);
+    sources.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,ALERT_SOURCE_NAMES));
+    sources.setSelection(alertSource());box.addView(sources);
+    TextView sourceHint=label("Кожне джерело має власне оформлення. Якщо карта перекрита повідомленням або погано працює у віджеті, виберіть іншу.",12,false);
+    sourceHint.setTextColor(Color.DKGRAY);box.addView(sourceHint);
     TextView refreshTitle=new TextView(this);refreshTitle.setText("Інтервал оновлення карти");refreshTitle.setTextSize(16);box.addView(refreshTitle);
     Spinner intervals=new Spinner(this);String[] choices={"10 секунд","15 секунд","30 секунд","1 хвилина","2 хвилини","5 хвилин"};int[] values={10,15,30,60,120,300};
     intervals.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,choices));
@@ -748,8 +772,8 @@ public class MainActivity extends Activity {
     ScrollView scroll=new ScrollView(this);scroll.addView(box);
     new AlertDialog.Builder(this).setTitle("Налаштування карти").setView(scroll)
       .setPositiveButton("Зберегти",(d,w)->{prefs.edit().putBoolean("alert_visible",visible.isChecked())
-        .putBoolean("alert_fullscreen",full.isChecked()).putInt("alert_interval",values[intervals.getSelectedItemPosition()])
-        .putString("alert_style",keys[styles.getSelectedItemPosition()]).putInt("alert_opacity",op.getProgress()+10).apply();applyAlertAppearance();})
+        .putInt("alert_source",sources.getSelectedItemPosition()).putInt("alert_interval",values[intervals.getSelectedItemPosition()])
+        .putString("alert_style",keys[styles.getSelectedItemPosition()]).putInt("alert_opacity",op.getProgress()+10).apply();loadAlertSource();applyAlertAppearance();})
       .setNegativeButton("Скасувати",null).show();
   }
 
