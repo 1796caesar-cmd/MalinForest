@@ -900,30 +900,64 @@ public class MainActivity extends Activity {
   }
 
   private void settings(){
-    boolean stretch=getPreferences(0).getBoolean("stretch_video",true);
-    String[] opts={"Вибрати папку з відео","Вибрати папку з файлами (MalinForest)","Відображення елементів",
-      "Розклад привітань","Час бездіяльності","Таймер бездіяльності у грі",
-      "Час зміни верхньої панелі","Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),
-      "Регулювання звуку","Хвилина мовчання","Налаштування карти","Оновити список відео",
-      "Оновити свята та новини","Перечитати Excel","Оновлення додатка"};
-    new AlertDialog.Builder(this).setTitle("Налаштування MalinForest").setItems(opts,(d,w)->{
+    String[] sections={"Файли","Відображення елементів","Розклад та час",
+      "Звуки та відео","Оновлення додатка"};
+    new AlertDialog.Builder(this).setTitle("Налаштування MalinForest")
+      .setItems(sections,(d,w)->{
+        if(w==0)filesSettings();
+        if(w==1)elementsSettings();
+        if(w==2)scheduleSettings();
+        if(w==3)mediaSettings();
+        if(w==4)updateSettings();
+      }).show();
+  }
+  private void filesSettings(){
+    String[] opts={"Вибрати папку з відео","Вибрати папку з файлами (MalinForest)",
+      "Оновити список відео","Оновити свята та новини","Перечитати Excel"};
+    new AlertDialog.Builder(this).setTitle("Файли").setItems(opts,(d,w)->{
       if(w==0)chooseFolder();
       if(w==1)chooseDataFolder();
-      if(w==2)displaySettings();
-      if(w==3)birthdaySettings();
-      if(w==4)mainIdleSettings();
-      if(w==5)gameTimeoutSettings();
-      if(w==6)topIntervalSettings();
-      if(w==7){boolean enabled=!getPreferences(0).getBoolean("stretch_video",true);
-        getPreferences(0).edit().putBoolean("stretch_video",enabled).apply();video.setStretchMode(enabled);}
-      if(w==8)volumeSettings();
-      if(w==9)silenceSettings();
-      if(w==10)alertSettings();
-      if(w==11&&folder!=null)loadFolder(folder,true);
-      if(w==12){loadHolidays();loadNews();}
-      if(w==13)loadData();
-      if(w==14)updateSettings();
-    }).show();
+      if(w==2&&folder!=null)loadFolder(folder,true);
+      if(w==3){loadHolidays();loadNews();}
+      if(w==4)loadData();
+    }).setNegativeButton("Назад",(d,w)->settings()).show();
+  }
+  private void elementsSettings(){
+    String[] names={"Кнопка інтерактивних ігор","Налаштування карти","Іменинники",
+      "Свята","Онлайн-новини","Факти з Excel"};
+    String[] keys={"games",null,"birthdays","holidays","news","facts"};
+    String[] opts=new String[names.length];
+    for(int i=0;i<names.length;i++){
+      if(i==1){opts[i]=names[i]+"  ›";continue;}
+      opts[i]=(enabled(keys[i])?"☑  ":"☐  ")+names[i];
+    }
+    new AlertDialog.Builder(this).setTitle("Відображення елементів")
+      .setItems(opts,(d,w)->{
+        if(w==1){alertSettings();return;}
+        getPreferences(0).edit().putBoolean(keys[w],!enabled(keys[w])).apply();
+        updateVisibility();elementsSettings();
+      }).setNegativeButton("Назад",(d,w)->settings()).show();
+  }
+  private void scheduleSettings(){
+    String[] opts={"Розклад привітань","Хвилина мовчання","Час бездіяльності",
+      "Таймер бездіяльності у грі","Час зміни верхньої панелі"};
+    new AlertDialog.Builder(this).setTitle("Розклад та час").setItems(opts,(d,w)->{
+      if(w==0)birthdaySettings();
+      if(w==1)silenceSettings();
+      if(w==2)mainIdleSettings();
+      if(w==3)gameTimeoutSettings();
+      if(w==4)topIntervalSettings();
+    }).setNegativeButton("Назад",(d,w)->settings()).show();
+  }
+  private void mediaSettings(){
+    boolean stretch=getPreferences(0).getBoolean("stretch_video",true);
+    String[] opts={"Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),"Регулювання звуку"};
+    new AlertDialog.Builder(this).setTitle("Звуки та відео").setItems(opts,(d,w)->{
+      if(w==0){boolean on=!getPreferences(0).getBoolean("stretch_video",true);
+        getPreferences(0).edit().putBoolean("stretch_video",on).apply();video.setStretchMode(on);
+        mediaSettings();}
+      if(w==1)volumeSettings();
+    }).setNegativeButton("Назад",(d,w)->settings()).show();
   }
   @Override protected void onActivityResult(int request,int result,Intent data){
     super.onActivityResult(request,result,data);
