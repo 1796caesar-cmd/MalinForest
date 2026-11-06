@@ -45,7 +45,10 @@ public class MainActivity extends Activity {
   private final Handler handler=new Handler(Looper.getMainLooper());
   private final ArrayList<Uri> playlist=new ArrayList<>();
   private final ArrayList<String> holidays=new ArrayList<>();
-  private FrameLayout root, content, videoLayer, bottomPanel, tickerViewport, gameOverlay;
+  private FrameLayout root, content, videoLayer, bottomPanel, tickerViewport, gameOverlay, alertTile;
+  private WebView alertWeb;
+  private TextView alertCaption;
+  private boolean alertEditing=false;
   private LinearLayout topPanel;
   private TextView gamesButton, gameTimerLabel;
   private int gameMode=-1, gameLives=3, gameIndex=0;
@@ -249,6 +252,7 @@ public class MainActivity extends Activity {
     String dataSaved=getPreferences(0).getString("data_folder",null);
     if(dataSaved!=null){dataFolder=Uri.parse(dataSaved);loadData();}
     updateVisibility();
+    setupAlertTile();
     handler.post(tick);handler.post(refresh);handler.postDelayed(rotateHoliday,topIntervalSeconds()*1000L);
   }
 
@@ -650,12 +654,111 @@ public class MainActivity extends Activity {
       mp.prepare();mp.start();
     }catch(Exception ex){stopGameSound();}
   }
+
+  // Віджет офіційної карти. Статус громади НЕ виводиться без перевіреного API.
+  private int alertInterval(){return getPreferences(0).getInt("alert_interval",30);}
+  private final Runnable alertRefresh=new Runnable(){@Override public void run(){
+    if(alertWeb!=null && alertTile!=null && alertTile.getVisibility()==View.VISIBLE){
+      alertWeb.reload();handler.postDelayed(this,Math.max(10,alertInterval())*1000L);
+    }
+  }};
+  private FrameLayout.LayoutParams alertLayout(){
+    android.content.SharedPreferences prefs=getPreferences(0);
+    int w=dp(prefs.getInt("alert_width",340)),h=dp(prefs.getInt("alert_height",245));
+    FrameLayout.LayoutParams lp=new FrameLayout.LayoutParams(w,h,Gravity.TOP|Gravity.LEFT);
+    lp.leftMargin=dp(prefs.getInt("alert_x",12));lp.topMargin=dp(prefs.getInt("alert_y",105));return lp;
+  }
+  private void alertSaveBounds(){
+    if(alertTile==null)return;
+    FrameLayout.LayoutParams lp=(FrameLayout.LayoutParams)alertTile.getLayoutParams();
+    getPreferences(0).edit().putInt("alert_width",Math.round(lp.width/getResources().getDisplayMetrics().density))
+      .putInt("alert_height",Math.round(lp.height/getResources().getDisplayMetrics().density))
+      .putInt("alert_x",Math.round(lp.leftMargin/getResources().getDisplayMetrics().density))
+      .putInt("alert_y",Math.round(lp.topMargin/getResources().getDisplayMetrics().density)).apply();
+  }
+  private void setupAlertTile(){
+    alertTile=new FrameLayout(this);alertTile.setClipChildren(true);
+    alertWeb=new WebView(this);alertWeb.getSettings().setJavaScriptEnabled(true);
+    alertWeb.getSettings().setDomStorageEnabled(true);
+    alertWeb.setWebViewClient(new WebViewClient());
+    alertTile.addView(alertWeb,new FrameLayout.LayoutParams(-1,-1));
+    alertCaption=label("Карта України · дані з map.ukrainealarm.com",11,true);
+    alertCaption.setGravity(Gravity.CENTER);alertCaption.setBackgroundColor(0xB9000000);
+    alertTile.addView(alertCaption,new FrameLayout.LayoutParams(-1,dp(27),Gravity.BOTTOM));
+    TextView edit=label("✥",24,true);edit.setGravity(Gravity.CENTER);edit.setBackground(bg(0xDD355A48,8));
+    FrameLayout.LayoutParams ep=new FrameLayout.LayoutParams(dp(44),dp(44),Gravity.TOP|Gravity.RIGHT);
+    alertTile.addView(edit,ep);edit.setVisibility(View.GONE);
+    TextView resize=label("↘",24,true);resize.setGravity(Gravity.CENTER);resize.setBackground(bg(0xDD355A48,8));
+    alertTile.addView(resize,new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.BOTTOM|Gravity.RIGHT));resize.setVisibility(View.GONE);
+    View.OnTouchListener move=new View.OnTouchListener(){float sx,sy;int x,y,w,h;
+      @Override public boolean onTouch(View v,MotionEvent e){if(!alertEditing)return false;
+        FrameLayout.LayoutParams lp=(FrameLayout.LayoutParams)alertTile.getLayoutParams();
+        if(e.getAction()==MotionEvent.ACTION_DOWN){sx=e.getRawX();sy=e.getRawY();x=lp.leftMargin;y=lp.topMargin;w=lp.width;h=lp.height;return true;}
+        if(e.getAction()==MotionEvent.ACTION_MOVE){int dx=(int)(e.getRawX()-sx),dy=(int)(e.getRawY()-sy);
+          if(v==resize){float ratio=(float)w/h;int nw=Math.max(dp(220),w+dx);nw=Math.min(nw,root.getWidth()-lp.leftMargin);
+            int nh=Math.round(nw/ratio);if(nh>root.getHeight()-lp.topMargin){nh=root.getHeight()-lp.topMargin;nw=Math.round(nh*ratio);}
+            lp.width=nw;lp.height=nh;
+          }else{lp.leftMargin=Math.max(0,Math.min(root.getWidth()-lp.width,x+dx));lp.topMargin=Math.max(0,Math.min(root.getHeight()-lp.height,y+dy));}
+          alertTile.setLayoutParams(lp);return true;}
+        if(e.getAction()==MotionEvent.ACTION_UP){alertSaveBounds();return true;}return true;
+      }};
+    edit.setOnTouchListener(move);resize.setOnTouchListener(move);
+    View.OnLongClickListener toggleEdit=v->{alertEditing=!alertEditing;edit.setVisibility(alertEditing?View.VISIBLE:View.GONE);
+      resize.setVisibility(alertEditing?View.VISIBLE:View.GONE);Toast.makeText(this,alertEditing?"Перетягніть ✥ або ↘. Утримуйте знову, щоб завершити.":"Положення збережено",Toast.LENGTH_LONG).show();return true;};
+    alertTile.setOnLongClickListener(toggleEdit);
+    alertWeb.setOnLongClickListener(toggleEdit);
+    root.addView(alertTile,alertLayout());
+    applyAlertAppearance();
+    alertWeb.loadUrl("https://map.ukrainealarm.com/");
+    handler.postDelayed(alertRefresh,alertInterval()*1000L);
+  }
+  private void applyAlertAppearance(){
+    if(alertTile==null)return;
+    boolean show=getPreferences(0).getBoolean("alert_visible",true);
+    alertTile.setVisibility(show?View.VISIBLE:View.GONE);
+    String style=getPreferences(0).getString("alert_style","tile");
+    int opacity=getPreferences(0).getInt("alert_opacity",50);
+    if(style.equals("none")){alertTile.setBackgroundColor(Color.TRANSPARENT);alertTile.setElevation(0);}
+    else{alertTile.setBackground(bg(Color.argb(style.equals("border")?20:Math.round(opacity*2.55f),10,22,28),12));alertTile.setElevation(dp(3));}
+    // WebView відображає сайт із власним фоном: прозорість підкладки не робить сайт прозорим.
+    if(show){handler.removeCallbacks(alertRefresh);handler.post(alertRefresh);}else handler.removeCallbacks(alertRefresh);
+  }
+  private void alertSettings(){
+    android.content.SharedPreferences prefs=getPreferences(0);
+    LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(dp(22),dp(12),dp(22),dp(12));
+    CheckBox visible=new CheckBox(this);visible.setText("Показувати карту");visible.setChecked(prefs.getBoolean("alert_visible",true));box.addView(visible);
+    CheckBox full=new CheckBox(this);full.setText("Автоматично на весь екран під час тривоги");full.setChecked(prefs.getBoolean("alert_fullscreen",false));full.setEnabled(false);box.addView(full);
+    TextView notice=label("Автоматичне розгортання потребує офіційного API-ключа. Поки що недоступне.",12,false);notice.setTextColor(Color.DKGRAY);box.addView(notice);
+    TextView region=new TextView(this);region.setText("Регіон: "+prefs.getString("alert_region","Малинська територіальна громада"));region.setTextSize(16);region.setPadding(0,dp(14),0,dp(14));box.addView(region);
+    region.setOnClickListener(v->{EditText name=new EditText(this);name.setSingleLine(true);name.setText(prefs.getString("alert_region","Малинська територіальна громада"));
+      new AlertDialog.Builder(this).setTitle("Регіон (назва для майбутнього API)").setView(name)
+      .setPositiveButton("Зберегти",(d,w)->{String r=name.getText().toString().trim();if(!r.isEmpty()){prefs.edit().putString("alert_region",r).apply();region.setText("Регіон: "+r);}}).setNegativeButton("Скасувати",null).show();});
+    TextView refreshTitle=new TextView(this);refreshTitle.setText("Інтервал оновлення карти");refreshTitle.setTextSize(16);box.addView(refreshTitle);
+    Spinner intervals=new Spinner(this);String[] choices={"10 секунд","15 секунд","30 секунд","1 хвилина","2 хвилини","5 хвилин"};int[] values={10,15,30,60,120,300};
+    intervals.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,choices));
+    for(int i=0;i<values.length;i++)if(values[i]==alertInterval())intervals.setSelection(i);box.addView(intervals);
+    TextView appearance=new TextView(this);appearance.setText("Оформлення карти");appearance.setTextSize(16);appearance.setPadding(0,dp(12),0,0);box.addView(appearance);
+    Spinner styles=new Spinner(this);String[] st={"Без рамки та фону","Напівпрозора плитка","Тонка рамка"};String[] keys={"none","tile","border"};
+    styles.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,st));
+    String selected=prefs.getString("alert_style","tile");for(int i=0;i<keys.length;i++)if(keys[i].equals(selected))styles.setSelection(i);box.addView(styles);
+    TextView opLabel=new TextView(this);opLabel.setText("Непрозорість плитки: "+prefs.getInt("alert_opacity",50)+"%");box.addView(opLabel);
+    SeekBar op=new SeekBar(this);op.setMax(80);op.setProgress(prefs.getInt("alert_opacity",50)-10);box.addView(op);
+    op.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar b,int v,boolean user){opLabel.setText("Непрозорість плитки: "+(v+10)+"%");}public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}});
+    TextView hint=new TextView(this);hint.setText("Утримуйте карту 2 секунди для переміщення та зміни розміру. Сайт може не підтримувати вбудовування в WebView.");box.addView(hint);
+    ScrollView scroll=new ScrollView(this);scroll.addView(box);
+    new AlertDialog.Builder(this).setTitle("Налаштування карти").setView(scroll)
+      .setPositiveButton("Зберегти",(d,w)->{prefs.edit().putBoolean("alert_visible",visible.isChecked())
+        .putBoolean("alert_fullscreen",full.isChecked()).putInt("alert_interval",values[intervals.getSelectedItemPosition()])
+        .putString("alert_style",keys[styles.getSelectedItemPosition()]).putInt("alert_opacity",op.getProgress()+10).apply();applyAlertAppearance();})
+      .setNegativeButton("Скасувати",null).show();
+  }
+
   private void settings(){
     boolean stretch=getPreferences(0).getBoolean("stretch_video",true);
     String[] opts={"Вибрати папку з відео","Вибрати папку з файлами (MalinForest)","Відображення елементів",
       "Розклад привітань","Час бездіяльності","Таймер бездіяльності у грі",
       "Час зміни верхньої панелі","Розтягувати відео: "+(stretch?"увімкнено":"вимкнено"),
-      "Регулювання звуку","Хвилина мовчання","Оновити список відео",
+      "Регулювання звуку","Хвилина мовчання","Налаштування карти","Оновити список відео",
       "Оновити свята та новини","Перечитати Excel"};
     new AlertDialog.Builder(this).setTitle("Налаштування MalinForest").setItems(opts,(d,w)->{
       if(w==0)chooseFolder();
@@ -669,9 +772,10 @@ public class MainActivity extends Activity {
         getPreferences(0).edit().putBoolean("stretch_video",enabled).apply();video.setStretchMode(enabled);}
       if(w==8)volumeSettings();
       if(w==9)silenceSettings();
-      if(w==10&&folder!=null)loadFolder(folder,true);
-      if(w==11){loadHolidays();loadNews();}
-      if(w==12)loadData();
+      if(w==10)alertSettings();
+      if(w==11&&folder!=null)loadFolder(folder,true);
+      if(w==12){loadHolidays();loadNews();}
+      if(w==13)loadData();
     }).show();
   }
   @Override protected void onActivityResult(int request,int result,Intent data){
@@ -968,7 +1072,7 @@ public class MainActivity extends Activity {
     if(!silenceActive&&!siteOpen&&video!=null&&!playlist.isEmpty()&&!video.isPlaying())video.start();}
   @Override protected void onPause(){if(video!=null&&video.isPlaying())video.pause();super.onPause();}
   @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);
-    endSilence();handler.removeCallbacks(gameIdle);handler.removeCallbacks(tickerFrame);if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();stopBirthdayMusic();stopGameSound();super.onDestroy();}
+    endSilence();handler.removeCallbacks(gameIdle);handler.removeCallbacks(tickerFrame);if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();if(alertWeb!=null)alertWeb.destroy();stopBirthdayMusic();stopGameSound();super.onDestroy();}
   // Ігри читають картинки з уже вибраної папки MalinForest через SAF.
   private Uri gameFile(String... parts){
     if(dataFolder==null)return null;
