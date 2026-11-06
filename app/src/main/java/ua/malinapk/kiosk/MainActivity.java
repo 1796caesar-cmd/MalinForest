@@ -580,6 +580,7 @@ public class MainActivity extends Activity {
   private void startSilence(String today){
     if(root==null)return;
     lastSilenceDay=today;silenceActive=true;
+    applyAlertAppearance();
     silencePausedBirthday=birthdayMusic!=null;
     if(birthdayMusic!=null)try{birthdayMusic.pause();}catch(Exception ignored){}
     if(video!=null&&video.isPlaying())video.pause();
@@ -608,6 +609,7 @@ public class MainActivity extends Activity {
   private void endSilence(){
     if(!silenceActive)return;silenceActive=false;stopSilenceSound();
     if(silenceOverlay!=null){root.removeView(silenceOverlay);silenceOverlay=null;}
+    applyAlertAppearance();
     if(web!=null)web.onResume();
     if(silencePausedBirthday&&birthdayMusic!=null)try{birthdayMusic.start();}catch(Exception ignored){}
     silencePausedBirthday=false;
@@ -738,13 +740,14 @@ public class MainActivity extends Activity {
   private void applyAlertAppearance(){
     if(alertTile==null)return;
     boolean show=getPreferences(0).getBoolean("alert_visible",true);
-    alertTile.setVisibility(show?View.VISIBLE:View.GONE);
+    alertTile.setVisibility(show&&!silenceActive?View.VISIBLE:View.GONE);
     String style=getPreferences(0).getString("alert_style","tile");
     int opacity=getPreferences(0).getInt("alert_opacity",50);
     if(style.equals("none")){alertTile.setBackgroundColor(Color.TRANSPARENT);alertTile.setElevation(0);}
     else{alertTile.setBackground(bg(Color.argb(style.equals("border")?20:Math.round(opacity*2.55f),10,22,28),12));alertTile.setElevation(dp(3));}
     // WebView відображає сайт із власним фоном: прозорість підкладки не робить сайт прозорим.
-    if(show){handler.removeCallbacks(alertRefresh);handler.post(alertRefresh);}else handler.removeCallbacks(alertRefresh);
+    handler.removeCallbacks(alertRefresh);
+    if(show&&!silenceActive)handler.post(alertRefresh);
   }
   private void alertSettings(){
     android.content.SharedPreferences prefs=getPreferences(0);
