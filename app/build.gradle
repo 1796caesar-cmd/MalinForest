@@ -14,7 +14,7 @@ android {
         // Номер збірки збільшується автоматично в GitHub Actions.
         versionCode = Integer.parseInt(System.getenv('MALINFOREST_VERSION_CODE') ?: '1')
         // Версію для користувача змінюємо при випуску наступної версії.
-        versionName = System.getenv('MALINFOREST_VERSION_NAME') ?: '1.5'
+        versionName = System.getenv('MALINFOREST_VERSION_NAME') ?: '1.6'
     }
 
     signingConfigs {

@@ -161,7 +161,7 @@ public class MainActivity extends Activity {
     videoLayer.addView(empty,new FrameLayout.LayoutParams(-1,-1));
 
     // Підказка стоїть НАД нижньою панеллю і не перекриває новини.
-    prompt=label("☝  ТОРКНІТЬСЯ ЕКРАНА, ЩОБ ДІЗНАТИСЯ БІЛЬШЕ",19,true);
+    prompt=label("☝  ТОРКНІТЬСЯ ЕКРАНА, ЩОБ ВІДВІДАТИ НАШ САЙТ",19,true);
     prompt.setGravity(Gravity.CENTER);prompt.setPadding(dp(20),dp(13),dp(20),dp(13));
     prompt.setBackground(bg(0xCC0A2017,14));
     FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);
@@ -489,6 +489,7 @@ public class MainActivity extends Activity {
   private void showSite(){
     if(siteOpen||birthdayShowing)return;siteOpen=true;lastPosition=video.getCurrentPosition();
     if(video.isPlaying())video.pause();videoLayer.setVisibility(View.GONE);
+    applyAlertAppearance(); // Карта прихована, поки відвідувач переглядає сайт.
     bottomPanel.setVisibility(View.GONE);if(gamesButton!=null)gamesButton.setVisibility(View.GONE);web.setVisibility(View.VISIBLE);
     // Верхня панель у режимі сайту непрозора.
     LinearLayout top=topPanel;
@@ -499,6 +500,7 @@ public class MainActivity extends Activity {
   private void showVideo(){
     if(!siteOpen)return;siteOpen=false;handler.removeCallbacks(idle);
     web.onPause();web.setVisibility(View.GONE);videoLayer.setVisibility(View.VISIBLE);
+    applyAlertAppearance(); // Повертаємо карту лише в режимі відео.
     bottomPanel.setVisibility(anyTicker()?View.VISIBLE:View.GONE);if(gamesButton!=null)gamesButton.setVisibility(enabled("games")?View.VISIBLE:View.GONE);
     LinearLayout top=topPanel;
     top.setBackgroundColor(0x99142A20);
@@ -746,14 +748,14 @@ public class MainActivity extends Activity {
   private void applyAlertAppearance(){
     if(alertTile==null)return;
     boolean show=getPreferences(0).getBoolean("alert_visible",true);
-    alertTile.setVisibility(show&&!silenceActive?View.VISIBLE:View.GONE);
+    alertTile.setVisibility(show&&!silenceActive&&!siteOpen?View.VISIBLE:View.GONE);
     String style=getPreferences(0).getString("alert_style","tile");
     int opacity=getPreferences(0).getInt("alert_opacity",50);
     if(style.equals("none")){alertTile.setBackgroundColor(Color.TRANSPARENT);alertTile.setElevation(0);}
     else{alertTile.setBackground(bg(Color.argb(style.equals("border")?20:Math.round(opacity*2.55f),10,22,28),12));alertTile.setElevation(dp(3));}
     // WebView відображає сайт із власним фоном: прозорість підкладки не робить сайт прозорим.
     handler.removeCallbacks(alertRefresh);
-    if(show&&!silenceActive)handler.post(alertRefresh);
+    if(show&&!silenceActive&&!siteOpen)handler.post(alertRefresh);
   }
   private void alertSettings(){
     android.content.SharedPreferences prefs=getPreferences(0);
