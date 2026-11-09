@@ -748,14 +748,14 @@ public class MainActivity extends Activity {
   private void applyAlertAppearance(){
     if(alertTile==null)return;
     boolean show=getPreferences(0).getBoolean("alert_visible",true);
-    alertTile.setVisibility(show&&!silenceActive&&!siteOpen?View.VISIBLE:View.GONE);
+    alertTile.setVisibility(show&&!silenceActive&&!siteOpen&&gameOverlay==null?View.VISIBLE:View.GONE);
     String style=getPreferences(0).getString("alert_style","tile");
     int opacity=getPreferences(0).getInt("alert_opacity",50);
     if(style.equals("none")){alertTile.setBackgroundColor(Color.TRANSPARENT);alertTile.setElevation(0);}
     else{alertTile.setBackground(bg(Color.argb(style.equals("border")?20:Math.round(opacity*2.55f),10,22,28),12));alertTile.setElevation(dp(3));}
     // WebView відображає сайт із власним фоном: прозорість підкладки не робить сайт прозорим.
     handler.removeCallbacks(alertRefresh);
-    if(show&&!silenceActive&&!siteOpen)handler.post(alertRefresh);
+    if(show&&!silenceActive&&!siteOpen&&gameOverlay==null)handler.post(alertRefresh);
   }
   private void alertSettings(){
     android.content.SharedPreferences prefs=getPreferences(0);
@@ -1300,6 +1300,7 @@ public class MainActivity extends Activity {
   private void gameShell(){
     if(gameOverlay!=null)root.removeView(gameOverlay);
     gameOverlay=new FrameLayout(this);root.addView(gameOverlay,new FrameLayout.LayoutParams(-1,-1));
+    applyAlertAppearance(); // Карта прихована в меню ігор та під час гри.
     gameOverlay.setBackgroundColor(0xFF21452B);
     ImageView bg=gameImage("Games","background.png");bg.setScaleType(ImageView.ScaleType.CENTER_CROP);
     gameOverlay.addView(bg,new FrameLayout.LayoutParams(-1,-1));
@@ -1311,6 +1312,7 @@ public class MainActivity extends Activity {
   private void closeGames(){
     handler.removeCallbacks(gameIdle);stopGameSound();
     if(gameOverlay!=null){root.removeView(gameOverlay);gameOverlay=null;}
+    applyAlertAppearance(); // Після виходу повертаємо карту лише до відео.
     gameMode=-1;gameTimerLabel=null;gameFinished=false;gameBusy=false;
     if(topPanel!=null)topPanel.setVisibility(View.VISIBLE);
     if(!siteOpen&&!birthdayShowing&&video!=null&&!playlist.isEmpty())video.start();
