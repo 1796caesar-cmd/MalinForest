@@ -39,6 +39,12 @@ public class MainActivity extends Activity {
   private static final String RELEASE_API="https://api.github.com/repos/1796caesar-cmd/MalinForest/releases/latest";
   private long updateDownloadId=-1;
   private BroadcastReceiver updateReceiver;
+  private AlertDialog updateProgressDialog;
+  private ProgressBar updateProgressBar;
+  private TextView updateProgressPercent, updateProgressBytes, updateProgressStatus;
+  private Uri downloadedUpdateUri;
+  private android.app.DownloadManager updateManager;
+  private final Runnable updateProgressPoll=new Runnable(){@Override public void run(){refreshUpdateProgress();}};
   private static final String SITE="https://malinapk.net/";
   private static final String WEATHER_URL="https://api.open-meteo.com/v1/forecast?latitude=50.77&longitude=29.24&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code&timezone=Europe%2FKyiv&forecast_days=2";
   private static final String[] NEWS_URLS={"https://www.openforest.org.ua/feed/", "https://www.openforest.org.ua/section/news/feed/"};
@@ -748,14 +754,14 @@ public class MainActivity extends Activity {
   private void applyAlertAppearance(){
     if(alertTile==null)return;
     boolean show=getPreferences(0).getBoolean("alert_visible",true);
-    alertTile.setVisibility(show&&!silenceActive&&!siteOpen&&gameOverlay==null?View.VISIBLE:View.GONE);
+    alertTile.setVisibility(show&&!silenceActive&&!siteOpen&&!birthdayShowing&&gameOverlay==null?View.VISIBLE:View.GONE);
     String style=getPreferences(0).getString("alert_style","tile");
     int opacity=getPreferences(0).getInt("alert_opacity",50);
     if(style.equals("none")){alertTile.setBackgroundColor(Color.TRANSPARENT);alertTile.setElevation(0);}
     else{alertTile.setBackground(bg(Color.argb(style.equals("border")?20:Math.round(opacity*2.55f),10,22,28),12));alertTile.setElevation(dp(3));}
     // WebView відображає сайт із власним фоном: прозорість підкладки не робить сайт прозорим.
     handler.removeCallbacks(alertRefresh);
-    if(show&&!silenceActive&&!siteOpen&&gameOverlay==null)handler.post(alertRefresh);
+    if(show&&!silenceActive&&!siteOpen&&!birthdayShowing&&gameOverlay==null)handler.post(alertRefresh);
   }
   private void alertSettings(){
     android.content.SharedPreferences prefs=getPreferences(0);
@@ -858,35 +864,123 @@ public class MainActivity extends Activity {
       });
     }).start();
   }
+  private String updateMegabytes(long bytes){
+    return String.format(new Locale("uk","UA"),"%.1f",bytes/1048576.0);
+  }
+  private void dismissUpdateProgress(){
+    handler.removeCallbacks(updateProgressPoll);
+    if(updateProgressDialog!=null){updateProgressDialog.dismiss();updateProgressDialog=null;}
+    updateProgressBar=null;updateProgressPercent=null;updateProgressBytes=null;updateProgressStatus=null;
+  }
+  private void unregisterUpdateReceiver(){
+    if(updateReceiver!=null){try{unregisterReceiver(updateReceiver);}catch(Exception ignored){}updateReceiver=null;}
+  }
+  private void cancelUpdateDownload(){
+    handler.removeCallbacks(updateProgressPoll);
+    if(updateManager!=null&&updateDownloadId!=-1)updateManager.remove(updateDownloadId);
+    updateDownloadId=-1;
+    unregisterUpdateReceiver();
+    dismissUpdateProgress();
+  }
+  private void refreshUpdateProgress(){
+    if(updateManager==null||updateDownloadId==-1||updateProgressDialog==null)return;
+    try(Cursor cursor=updateManager.query(new android.app.DownloadManager.Query().setFilterById(updateDownloadId))){
+      if(cursor==null||!cursor.moveToFirst()){
+        finishUpdateDownload(false,null);return;
+      }
+      int status=cursor.getInt(cursor.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_STATUS));
+      long downloaded=cursor.getLong(cursor.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+      long total=cursor.getLong(cursor.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+      if(updateProgressBytes!=null)updateProgressBytes.setText(total>0
+        ?updateMegabytes(downloaded)+" / "+updateMegabytes(total)+" МБ"
+        :updateMegabytes(downloaded)+" МБ завантажено");
+      if(total>0){
+        int percent=(int)Math.min(100,Math.max(0,downloaded*100L/total));
+        if(updateProgressBar!=null){updateProgressBar.setIndeterminate(false);updateProgressBar.setProgress(percent);}
+        if(updateProgressPercent!=null)updateProgressPercent.setText(percent+"%");
+      }else{
+        if(updateProgressBar!=null)updateProgressBar.setIndeterminate(true);
+        if(updateProgressPercent!=null)updateProgressPercent.setText("Завантаження…");
+      }
+      if(status==android.app.DownloadManager.STATUS_SUCCESSFUL){
+        finishUpdateDownload(true,updateManager.getUriForDownloadedFile(updateDownloadId));return;
+      }
+      if(status==android.app.DownloadManager.STATUS_FAILED){finishUpdateDownload(false,null);return;}
+      if(updateProgressStatus!=null)updateProgressStatus.setText(status==android.app.DownloadManager.STATUS_PAUSED
+        ?"Очікування мережі…":"Завантаження файлу APK…");
+    }catch(Exception e){finishUpdateDownload(false,null);return;}
+    handler.postDelayed(updateProgressPoll,500);
+  }
+  private void finishUpdateDownload(boolean success,Uri apk){
+    handler.removeCallbacks(updateProgressPoll);
+    unregisterUpdateReceiver();
+    updateDownloadId=-1;
+    if(updateProgressDialog==null)return;
+    if(!success||apk==null){
+      dismissUpdateProgress();
+      if(!isFinishing())new AlertDialog.Builder(this).setTitle("Помилка завантаження")
+        .setMessage("Не вдалося завантажити APK. Перевірте інтернет і повторіть спробу.")
+        .setPositiveButton("OK",null).show();
+      return;
+    }
+    downloadedUpdateUri=apk;
+    if(updateProgressBar!=null){updateProgressBar.setIndeterminate(false);updateProgressBar.setProgress(100);}
+    if(updateProgressPercent!=null)updateProgressPercent.setText("100%");
+    if(updateProgressStatus!=null)updateProgressStatus.setText("Завантаження завершено. Можна встановлювати.");
+    updateProgressDialog.getButton(AlertDialog.BUTTON_NEGATIVE).setText("Закрити");
+    android.widget.Button install=updateProgressDialog.getButton(AlertDialog.BUTTON_POSITIVE);
+    install.setVisibility(View.VISIBLE);
+    install.setEnabled(true);
+  }
   private void downloadUpdate(String url,String version){
     try{
-      android.app.DownloadManager manager=(android.app.DownloadManager)getSystemService(DOWNLOAD_SERVICE);
+      if(updateDownloadId!=-1)cancelUpdateDownload();
+      updateManager=(android.app.DownloadManager)getSystemService(DOWNLOAD_SERVICE);
       android.app.DownloadManager.Request request=new android.app.DownloadManager.Request(Uri.parse(url));
       request.setTitle("MalinForest v"+version);
       request.setDescription("Оновлення MalinForest");
       request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
       request.setMimeType("application/vnd.android.package-archive");
       request.setDestinationInExternalFilesDir(this,Environment.DIRECTORY_DOWNLOADS,"MalinForest-v"+version+".apk");
-      updateDownloadId=manager.enqueue(request);
-      Toast.makeText(this,"Завантаження оновлення розпочато",Toast.LENGTH_LONG).show();
-      if(updateReceiver!=null){try{unregisterReceiver(updateReceiver);}catch(Exception ignored){}}
+      updateDownloadId=updateManager.enqueue(request);
+      downloadedUpdateUri=null;
+      LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);
+      int pad=(int)(20*getResources().getDisplayMetrics().density);
+      layout.setPadding(pad,pad,pad,pad);
+      updateProgressPercent=new TextView(this);updateProgressPercent.setText("0%");
+      updateProgressPercent.setTextSize(26);updateProgressPercent.setTypeface(null,Typeface.BOLD);
+      layout.addView(updateProgressPercent);
+      updateProgressBytes=new TextView(this);updateProgressBytes.setText("0.0 МБ завантажено");
+      layout.addView(updateProgressBytes);
+      updateProgressBar=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);
+      updateProgressBar.setMax(100);updateProgressBar.setProgress(0);
+      LinearLayout.LayoutParams barParams=new LinearLayout.LayoutParams(-1,(int)(12*getResources().getDisplayMetrics().density));
+      barParams.topMargin=pad;barParams.bottomMargin=pad;
+      layout.addView(updateProgressBar,barParams);
+      updateProgressStatus=new TextView(this);updateProgressStatus.setText("Завантаження файлу APK…");
+      layout.addView(updateProgressStatus);
+      updateProgressDialog=new AlertDialog.Builder(this).setTitle("Оновлення MalinForest v"+version)
+        .setView(layout).setNegativeButton("Скасувати",null)
+        .setPositiveButton("Встановити",(d,w)->{Uri apk=downloadedUpdateUri;dismissUpdateProgress();if(apk!=null)installUpdate(apk);})
+        .setCancelable(false).create();
+      updateProgressDialog.setOnShowListener(d->{
+        updateProgressDialog.getButton(AlertDialog.BUTTON_POSITIVE).setVisibility(View.GONE);
+        updateProgressDialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v->{
+          if(updateDownloadId!=-1)cancelUpdateDownload();else dismissUpdateProgress();
+        });
+      });
+      updateProgressDialog.show();
       updateReceiver=new BroadcastReceiver(){@Override public void onReceive(Context context,Intent intent){
-        if(intent.getLongExtra(android.app.DownloadManager.EXTRA_DOWNLOAD_ID,-1)!=updateDownloadId)return;
-        android.app.DownloadManager.Query q=new android.app.DownloadManager.Query().setFilterById(updateDownloadId);
-        try(Cursor cursor=manager.query(q)){
-          if(cursor!=null&&cursor.moveToFirst()){
-            int status=cursor.getInt(cursor.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_STATUS));
-            if(status==android.app.DownloadManager.STATUS_SUCCESSFUL){
-              Uri apk=manager.getUriForDownloadedFile(updateDownloadId);
-              if(apk!=null)installUpdate(apk);
-            }else Toast.makeText(MainActivity.this,"Не вдалося завантажити APK",Toast.LENGTH_LONG).show();
-          }
-        }catch(Exception e){Toast.makeText(MainActivity.this,"Помилка завантаження: "+e.getMessage(),Toast.LENGTH_LONG).show();}
-        try{unregisterReceiver(this);}catch(Exception ignored){}updateReceiver=null;
+        if(intent.getLongExtra(android.app.DownloadManager.EXTRA_DOWNLOAD_ID,-1)==updateDownloadId)
+          handler.post(updateProgressPoll);
       }};
       registerReceiver(updateReceiver,new IntentFilter(android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE));
-    }catch(Exception e){new AlertDialog.Builder(this).setTitle("Помилка завантаження")
-      .setMessage(e.getMessage()).setPositiveButton("OK",null).show();}
+      handler.post(updateProgressPoll);
+    }catch(Exception e){
+      cancelUpdateDownload();
+      new AlertDialog.Builder(this).setTitle("Помилка завантаження")
+        .setMessage(e.getMessage()).setPositiveButton("OK",null).show();
+    }
   }
   private void installUpdate(Uri apk){
     try{
@@ -1252,7 +1346,7 @@ public class MainActivity extends Activity {
   @Override protected void onResume(){super.onResume();immersive();
     if(!silenceActive&&!siteOpen&&video!=null&&!playlist.isEmpty()&&!video.isPlaying())video.start();}
   @Override protected void onPause(){if(video!=null&&video.isPlaying())video.pause();super.onPause();}
-  @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);
+  @Override protected void onDestroy(){unregisterUpdateReceiver();dismissUpdateProgress();handler.removeCallbacksAndMessages(null);
     endSilence();handler.removeCallbacks(gameIdle);handler.removeCallbacks(tickerFrame);if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();if(alertWeb!=null)alertWeb.destroy();stopBirthdayMusic();stopGameSound();super.onDestroy();}
   // Ігри читають картинки з уже вибраної папки MalinForest через SAF.
   private Uri gameFile(String... parts){
@@ -1652,10 +1746,10 @@ public class MainActivity extends Activity {
       birthdayMusic.setVolume(volume,volume);birthdayMusic.prepare();birthdayMusic.start();
     }catch(Exception ex){stopBirthdayMusic();}
   }
-  private void showNextBirthday(){if(siteOpen){stopBirthdayMusic();birthdayShowing=false;if(birthdayOverlay!=null){root.removeView(birthdayOverlay);birthdayOverlay=null;}return;}if(birthdayQueueIndex>=birthdayQueue.size()){
+  private void showNextBirthday(){if(siteOpen){stopBirthdayMusic();birthdayShowing=false;applyAlertAppearance();if(birthdayOverlay!=null){root.removeView(birthdayOverlay);birthdayOverlay=null;}return;}if(birthdayQueueIndex>=birthdayQueue.size()){
       if(birthdayOverlay!=null){root.removeView(birthdayOverlay);birthdayOverlay=null;}
-      stopBirthdayMusic();birthdayShowing=false;if(!siteOpen&&video!=null&&!playlist.isEmpty())video.start();return;}
-    birthdayShowing=true;if(video!=null&&video.isPlaying())video.pause();
+      stopBirthdayMusic();birthdayShowing=false;applyAlertAppearance();if(!siteOpen&&video!=null&&!playlist.isEmpty())video.start();return;}
+    birthdayShowing=true;applyAlertAppearance();if(video!=null&&video.isPlaying())video.pause();
     startBirthdayMusic();
     currentBirthdayDeferred=birthdayDeferred.size()>birthdayQueueIndex&&birthdayDeferred.get(birthdayQueueIndex);
     Person p=birthdayQueue.get(birthdayQueueIndex++);int age=Calendar.getInstance().get(Calendar.YEAR)-p.year;
