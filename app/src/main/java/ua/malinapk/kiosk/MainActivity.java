@@ -1078,6 +1078,7 @@ public class MainActivity extends Activity {
       "Пора року: "+seasons[choice],
       "Кількість частинок: "+densities[den],
       "Швидкість: "+speeds[speed],
+      "Розмір частинок: "+p.getInt("season_size",100)+"%",
       (p.getBoolean("new_year_videos",false)?"☑  ":"☐  ")+"Новорічні відео",
       "Вибрати папку з новорічними відео"+(newYearFolder==null?" (не вибрано)":" (вибрано)"),
       (p.getBoolean("new_year_countdown",true)?"☑  ":"☐  ")+"Відлік до Нового року"
@@ -1089,6 +1090,36 @@ public class MainActivity extends Activity {
         if(w==2)new AlertDialog.Builder(this).setTitle("Кількість частинок").setSingleChoiceItems(densities,den,(d,n)->{p.edit().putInt("season_density",n).apply();d.dismiss();seasonSettings();}).show();
         if(w==3)new AlertDialog.Builder(this).setTitle("Швидкість").setSingleChoiceItems(speeds,speed,(d,n)->{p.edit().putInt("season_speed",n).apply();d.dismiss();seasonSettings();}).show();
         if(w==4){
+          LinearLayout box=new LinearLayout(this);
+          box.setOrientation(LinearLayout.VERTICAL);
+          box.setPadding(dp(22),dp(12),dp(22),dp(12));
+          TextView sizeLabel=new TextView(this);
+          sizeLabel.setTextSize(18);
+          sizeLabel.setTextColor(Color.DKGRAY);
+          int savedSize=Math.max(50,Math.min(200,p.getInt("season_size",100)));
+          sizeLabel.setText("Розмір: "+savedSize+"%");
+          box.addView(sizeLabel);
+          SeekBar sizeBar=new SeekBar(this);
+          sizeBar.setMax(150);
+          sizeBar.setProgress(savedSize-50);
+          box.addView(sizeBar);
+          sizeBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            @Override public void onProgressChanged(SeekBar bar,int progress,boolean fromUser){
+              sizeLabel.setText("Розмір: "+(progress+50)+"%");
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar){}
+            @Override public void onStopTrackingTouch(SeekBar bar){}
+          });
+          new AlertDialog.Builder(this).setTitle("Розмір сезонних частинок")
+            .setView(box)
+            .setNeutralButton("100%",(d,w)->{p.edit().putInt("season_size",100).apply();seasonSettings();})
+            .setNegativeButton("Скасувати",(d,w)->seasonSettings())
+            .setPositiveButton("Зберегти",(d,w)->{
+              p.edit().putInt("season_size",sizeBar.getProgress()+50).apply();
+              seasonSettings();
+            }).show();
+        }
+        if(w==5){
           boolean active=!p.getBoolean("new_year_videos",false);
           if(active&&newYearFolder==null){Toast.makeText(this,"Спочатку виберіть папку з новорічними відео",Toast.LENGTH_LONG).show();seasonSettings();return;}
           p.edit().putBoolean("new_year_videos",active).apply();
@@ -1096,8 +1127,8 @@ public class MainActivity extends Activity {
           if(!siteOpen&&!birthdayShowing&&!silenceActive)playCurrent();
           seasonSettings();
         }
-        if(w==5)chooseNewYearFolder();
-        if(w==6){p.edit().putBoolean("new_year_countdown",!p.getBoolean("new_year_countdown",true)).apply();updateNewYearCountdown();seasonSettings();}
+        if(w==6)chooseNewYearFolder();
+        if(w==7){p.edit().putBoolean("new_year_countdown",!p.getBoolean("new_year_countdown",true)).apply();updateNewYearCountdown();seasonSettings();}
       }).setNegativeButton("Назад",(d,w)->elementsSettings()).show();
   }
   private void updateNewYearCountdown(){
