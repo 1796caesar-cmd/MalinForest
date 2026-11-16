@@ -53,7 +53,7 @@ public class MainActivity extends Activity {
   private static final int NEWS_CACHE_VERSION=9;
   private static final String HOLIDAY_URL="https://daytoday.ua/sogodni/";
   private static final int HOLIDAY_CACHE_VERSION=2;
-  private static final int PICK_FOLDER=44, PICK_DATA=45;
+  private static final int PICK_FOLDER=44, PICK_DATA=45, PICK_NEW_YEAR_FOLDER=46;
   private final Handler handler=new Handler(Looper.getMainLooper());
   private final ArrayList<Uri> playlist=new ArrayList<>();
   private final ArrayList<String> holidays=new ArrayList<>();
@@ -71,11 +71,12 @@ public class MainActivity extends Activity {
   private final Runnable gameIdle=new Runnable(){@Override public void run(){if(gameOverlay==null)return;long left=gameTimeoutMs()-(System.currentTimeMillis()-gameLastTouch);if(left<=0){closeGames();return;}if(gameTimerLabel!=null)gameTimerLabel.setText("◷ "+String.format(Locale.US,"%02d:%02d",(left+999)/1000/60,(left+999)/1000%60));handler.postDelayed(this,500);}};
   private FitVideoView video;
   private WebView web;
-  private TextView prompt, clock, date, weather, forecast, empty, tickerText;
+  private TextView prompt, clock, date, newYearCountdown, weather, forecast, empty, tickerText;
   private TextSwitcher holidaySwitcher;
   private int index=0, timeout=120000, lastPosition=0, holidayIndex=0;
   private boolean siteOpen=false;
-  private Uri folder;
+  private Uri folder, newYearFolder;
+  private SeasonOverlayView seasonVideoOverlay;
   private long lastTouch;
   private String cachedNews="";
   private String pendingNews=null;
@@ -165,6 +166,8 @@ public class MainActivity extends Activity {
     empty=label("",19,false);empty.setGravity(Gravity.CENTER);
     empty.setPadding(dp(20),dp(20),dp(20),dp(20));
     videoLayer.addView(empty,new FrameLayout.LayoutParams(-1,-1));
+    seasonVideoOverlay=new SeasonOverlayView(this);
+    videoLayer.addView(seasonVideoOverlay,new FrameLayout.LayoutParams(-1,-1));
 
     // Підказка стоїть НАД нижньою панеллю і не перекриває новини.
     prompt=label("☝  ТОРКНІТЬСЯ ЕКРАНА, ЩОБ ВІДВІДАТИ НАШ САЙТ",19,true);
@@ -206,6 +209,8 @@ public class MainActivity extends Activity {
     top.addView(timeBox,new LinearLayout.LayoutParams(0,-2,2));
     clock=label("--:--",28,true);timeBox.addView(clock);
     date=label("",12,false);date.setTextColor(0xFFB8D2C1);timeBox.addView(date);
+    newYearCountdown=label("",12,true);newYearCountdown.setTextColor(0xFFFFE2A2);
+    newYearCountdown.setMaxLines(2);timeBox.addView(newYearCountdown);
 
     LinearLayout holidayBox=new LinearLayout(this);holidayBox.setGravity(Gravity.CENTER);
     holidayBox.setOrientation(LinearLayout.VERTICAL);
@@ -259,12 +264,16 @@ public class MainActivity extends Activity {
     FrameLayout.LayoutParams gb=new FrameLayout.LayoutParams(-2,-2,Gravity.RIGHT|Gravity.BOTTOM);gb.setMargins(0,0,dp(16),dp(65));
     content.addView(gamesButton,gb);gamesButton.setOnClickListener(v->openGameMenu());
     String saved=getPreferences(0).getString("folder",null);
-    if(saved!=null){folder=Uri.parse(saved);loadFolder(folder,true);}
+    if(saved!=null)folder=Uri.parse(saved);
+    String holidaySaved=getPreferences(0).getString("new_year_folder",null);
+    if(holidaySaved!=null)newYearFolder=Uri.parse(holidaySaved);
+    loadFolder(folder,true);
     if(playlist.isEmpty())showEmpty();else playCurrent();
     String dataSaved=getPreferences(0).getString("data_folder",null);
     if(dataSaved!=null){dataFolder=Uri.parse(dataSaved);loadData();}
     updateVisibility();
     setupAlertTile();
+    updateSeasonVisibility();
     handler.post(tick);handler.post(refresh);handler.postDelayed(rotateHoliday,topIntervalSeconds()*1000L);
   }
 
@@ -475,6 +484,7 @@ public class MainActivity extends Activity {
   private void updateClock(){
     Date now=new Date();clock.setText(new SimpleDateFormat("HH:mm",new Locale("uk","UA")).format(now));
     date.setText(new SimpleDateFormat("EEEE, d MMMM",new Locale("uk","UA")).format(now));
+    updateNewYearCountdown();
     checkBirthdays();
     if(!todayKey().equals(holidayDate)){
       holidayDate=todayKey();holidays.clear();holidayIndex=0;
@@ -495,6 +505,7 @@ public class MainActivity extends Activity {
   private void showSite(){
     if(siteOpen||birthdayShowing)return;siteOpen=true;lastPosition=video.getCurrentPosition();
     if(video.isPlaying())video.pause();videoLayer.setVisibility(View.GONE);
+    updateSeasonVisibility();
     applyAlertAppearance(); // Карта прихована, поки відвідувач переглядає сайт.
     bottomPanel.setVisibility(View.GONE);if(gamesButton!=null)gamesButton.setVisibility(View.GONE);web.setVisibility(View.VISIBLE);
     // Верхня панель у режимі сайту непрозора.
@@ -506,6 +517,7 @@ public class MainActivity extends Activity {
   private void showVideo(){
     if(!siteOpen)return;siteOpen=false;handler.removeCallbacks(idle);
     web.onPause();web.setVisibility(View.GONE);videoLayer.setVisibility(View.VISIBLE);
+    updateSeasonVisibility();
     applyAlertAppearance(); // Повертаємо карту лише в режимі відео.
     bottomPanel.setVisibility(anyTicker()?View.VISIBLE:View.GONE);if(gamesButton!=null)gamesButton.setVisibility(enabled("games")?View.VISIBLE:View.GONE);
     LinearLayout top=topPanel;
@@ -594,6 +606,7 @@ public class MainActivity extends Activity {
   private void startSilence(String today){
     if(root==null)return;
     lastSilenceDay=today;silenceActive=true;
+    updateSeasonVisibility();
     applyAlertAppearance();
     silencePausedBirthday=birthdayMusic!=null;
     if(birthdayMusic!=null)try{birthdayMusic.pause();}catch(Exception ignored){}
@@ -608,6 +621,7 @@ public class MainActivity extends Activity {
     image.setScaleType(ImageView.ScaleType.FIT_CENTER);
     silenceOverlay.addView(image,new FrameLayout.LayoutParams(-1,-1));
     root.addView(silenceOverlay,new FrameLayout.LayoutParams(-1,-1));
+    if(topPanel!=null){topPanel.setVisibility(View.VISIBLE);topPanel.bringToFront();}
     try{
       Uri customSound=gameFile("silence.mp3");
       if(customSound!=null){
@@ -622,6 +636,7 @@ public class MainActivity extends Activity {
     try{silenceSound.release();}catch(Exception ignored){}silenceSound=null;}}
   private void endSilence(){
     if(!silenceActive)return;silenceActive=false;stopSilenceSound();
+    updateSeasonVisibility();
     if(silenceOverlay!=null){root.removeView(silenceOverlay);silenceOverlay=null;}
     applyAlertAppearance();
     if(web!=null)web.onResume();
@@ -1018,20 +1033,96 @@ public class MainActivity extends Activity {
   }
   private void elementsSettings(){
     String[] names={"Кнопка інтерактивних ігор","Налаштування карти","Іменинники",
-      "Свята","Онлайн-новини","Факти з Excel"};
-    String[] keys={"games",null,"birthdays","holidays","news","facts"};
+      "Свята","Онлайн-новини","Факти з Excel","Сезонні ефекти"};
+    String[] keys={"games",null,"birthdays","holidays","news","facts",null};
     String[] opts=new String[names.length];
     for(int i=0;i<names.length;i++){
-      if(i==1){opts[i]=names[i]+"  ›";continue;}
+      if(i==1||i==6){opts[i]=names[i]+"  ›";continue;}
       opts[i]=(enabled(keys[i])?"☑  ":"☐  ")+names[i];
     }
     new AlertDialog.Builder(this).setTitle("Відображення елементів")
       .setItems(opts,(d,w)->{
         if(w==1){alertSettings();return;}
+        if(w==6){seasonSettings();return;}
         getPreferences(0).edit().putBoolean(keys[w],!enabled(keys[w])).apply();
         updateVisibility();elementsSettings();
       }).setNegativeButton("Назад",(d,w)->settings()).show();
   }
+
+  private void updateSeasonVisibility(){
+    if(seasonVideoOverlay==null)return;
+    boolean on=getPreferences(0).getBoolean("season_enabled",false);
+    boolean videoVisible=!siteOpen&&!birthdayShowing&&!silenceActive&&gameOverlay==null;
+    seasonVideoOverlay.setVisibility(on&&videoVisible?View.VISIBLE:View.GONE);
+    if(birthdayOverlay!=null){
+      for(int i=0;i<birthdayOverlay.getChildCount();i++){
+        View v=birthdayOverlay.getChildAt(i);
+        if(v instanceof SeasonOverlayView)v.setVisibility(on&&birthdayShowing&&!silenceActive?View.VISIBLE:View.GONE);
+      }
+    }
+  }
+  private void chooseNewYearFolder(){
+    Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+    startActivityForResult(i,PICK_NEW_YEAR_FOLDER);
+  }
+  private void seasonSettings(){
+    android.content.SharedPreferences p=getPreferences(0);
+    String[] seasons={"Автоматично за календарем","Зима — сніг","Весна — пелюстки","Літо — світлячки","Осінь — листя"};
+    int choice=Math.max(0,Math.min(4,p.getInt("season_mode",0)));
+    String[] densities={"Мало","Помірно","Багато"},speeds={"Повільно","Звичайно","Швидко"};
+    int den=Math.max(0,Math.min(2,p.getInt("season_density",1)));
+    int speed=Math.max(0,Math.min(2,p.getInt("season_speed",0)));
+    String[] opts={
+      (p.getBoolean("season_enabled",false)?"☑  ":"☐  ")+"Сезонні ефекти",
+      "Пора року: "+seasons[choice],
+      "Кількість частинок: "+densities[den],
+      "Швидкість: "+speeds[speed],
+      (p.getBoolean("new_year_videos",false)?"☑  ":"☐  ")+"Новорічні відео",
+      "Вибрати папку з новорічними відео"+(newYearFolder==null?" (не вибрано)":" (вибрано)"),
+      (p.getBoolean("new_year_countdown",true)?"☑  ":"☐  ")+"Відлік до Нового року"
+    };
+    new AlertDialog.Builder(this).setTitle("Сезонні ефекти")
+      .setItems(opts,(dialog,w)->{
+        if(w==0){p.edit().putBoolean("season_enabled",!p.getBoolean("season_enabled",false)).apply();updateSeasonVisibility();seasonSettings();}
+        if(w==1)new AlertDialog.Builder(this).setTitle("Пора року").setSingleChoiceItems(seasons,choice,(d,n)->{p.edit().putInt("season_mode",n).apply();d.dismiss();seasonSettings();}).show();
+        if(w==2)new AlertDialog.Builder(this).setTitle("Кількість частинок").setSingleChoiceItems(densities,den,(d,n)->{p.edit().putInt("season_density",n).apply();d.dismiss();seasonSettings();}).show();
+        if(w==3)new AlertDialog.Builder(this).setTitle("Швидкість").setSingleChoiceItems(speeds,speed,(d,n)->{p.edit().putInt("season_speed",n).apply();d.dismiss();seasonSettings();}).show();
+        if(w==4){
+          boolean active=!p.getBoolean("new_year_videos",false);
+          if(active&&newYearFolder==null){Toast.makeText(this,"Спочатку виберіть папку з новорічними відео",Toast.LENGTH_LONG).show();seasonSettings();return;}
+          p.edit().putBoolean("new_year_videos",active).apply();
+          index=0;loadFolder(folder,true);
+          if(!siteOpen&&!birthdayShowing&&!silenceActive)playCurrent();
+          seasonSettings();
+        }
+        if(w==5)chooseNewYearFolder();
+        if(w==6){p.edit().putBoolean("new_year_countdown",!p.getBoolean("new_year_countdown",true)).apply();updateNewYearCountdown();seasonSettings();}
+      }).setNegativeButton("Назад",(d,w)->elementsSettings()).show();
+  }
+  private void updateNewYearCountdown(){
+    if(newYearCountdown==null)return;
+    if(!getPreferences(0).getBoolean("new_year_countdown",true)){newYearCountdown.setVisibility(View.GONE);return;}
+    Calendar now=Calendar.getInstance(TimeZone.getTimeZone("Europe/Kyiv"));
+    int month=now.get(Calendar.MONTH),day=now.get(Calendar.DAY_OF_MONTH),year=now.get(Calendar.YEAR);
+    String value="";
+    if(month==Calendar.DECEMBER){
+      Calendar next=Calendar.getInstance(TimeZone.getTimeZone("Europe/Kyiv"));
+      next.clear();next.set(year+1,Calendar.JANUARY,1,0,0,0);
+      long remaining=Math.max(0,next.getTimeInMillis()-now.getTimeInMillis());
+      if(day==31){
+        long hours=remaining/3600000L;
+        // "менше N годин" має залишатися математично правдивим, навіть рівно о 09:00.
+        value="🎄 До Нового року залишилось менше "+(hours+1)+" годин";
+      }else{
+        int days=(int)Math.ceil(remaining/86400000.0);
+        value="🎄 До Нового року залишилось "+days+" днів";
+      }
+    }else if(month==Calendar.JANUARY&&day==1)value="🎉 З Новим "+year+" роком!";
+    newYearCountdown.setText(value);
+    newYearCountdown.setVisibility(value.isEmpty()?View.GONE:View.VISIBLE);
+  }
+
   private void scheduleSettings(){
     String[] opts={"Розклад привітань","Хвилина мовчання","Час бездіяльності",
       "Таймер бездіяльності у грі","Час зміни верхньої панелі"};
@@ -1059,6 +1150,12 @@ public class MainActivity extends Activity {
       Uri uri=data.getData();try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}
       dataFolder=uri;getPreferences(0).edit().putString("data_folder",uri.toString()).apply();loadData();return;
     }
+    if(request==PICK_NEW_YEAR_FOLDER&&result==RESULT_OK&&data!=null){
+      Uri uri=data.getData();try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}
+      newYearFolder=uri;getPreferences(0).edit().putString("new_year_folder",uri.toString()).apply();
+      if(getPreferences(0).getBoolean("new_year_videos",false)){index=0;loadFolder(folder,true);if(!siteOpen&&!birthdayShowing&&!silenceActive)playCurrent();}
+      seasonSettings();return;
+    }
     if(request==PICK_FOLDER&&result==RESULT_OK&&data!=null){
       Uri uri=data.getData();try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}
       folder=uri;getPreferences(0).edit().putString("folder",uri.toString()).apply();loadFolder(uri,true);index=0;
@@ -1067,8 +1164,11 @@ public class MainActivity extends Activity {
   }
   private void loadFolder(Uri tree,boolean notify){
     ArrayList<Uri> found=new ArrayList<>();
+    boolean holiday=getPreferences(0).getBoolean("new_year_videos",false)&&newYearFolder!=null;
+    Uri selected=holiday?newYearFolder:tree;
+    if(selected==null){playlist.clear();return;}
     try{
-      Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,DocumentsContract.getTreeDocumentId(tree));
+      Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(selected,DocumentsContract.getTreeDocumentId(selected));
       try(Cursor c=getContentResolver().query(children,new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,
         DocumentsContract.Document.COLUMN_MIME_TYPE,DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null)){
         if(c!=null){ArrayList<String[]> entries=new ArrayList<>();
@@ -1076,8 +1176,13 @@ public class MainActivity extends Activity {
             if(name!=null&&((mime!=null&&mime.startsWith("video/"))||name.toLowerCase(Locale.ROOT).matches(".*\\.(mp4|mkv|webm|3gp|mov)$")))
               entries.add(new String[]{c.getString(0),name});}
           Collections.sort(entries,(a,b)->a[1].compareToIgnoreCase(b[1]));
-          for(String[] e:entries)found.add(DocumentsContract.buildDocumentUriUsingTree(tree,e[0]));
+          for(String[] e:entries)found.add(DocumentsContract.buildDocumentUriUsingTree(selected,e[0]));
         }
+      }
+      if(holiday&&found.isEmpty()&&tree!=null){
+        getPreferences(0).edit().putBoolean("new_year_videos",false).apply();
+        Toast.makeText(this,"Новорічна папка порожня. Повертаємо звичайні відео.",Toast.LENGTH_LONG).show();
+        loadFolder(tree,notify);return;
       }
       playlist.clear();playlist.addAll(found);if(index>=playlist.size())index=0;
       if(notify)Toast.makeText(this,"Знайдено відео: "+playlist.size(),Toast.LENGTH_SHORT).show();
@@ -1395,10 +1500,11 @@ public class MainActivity extends Activity {
     if(gameOverlay!=null)root.removeView(gameOverlay);
     gameOverlay=new FrameLayout(this);root.addView(gameOverlay,new FrameLayout.LayoutParams(-1,-1));
     applyAlertAppearance(); // Карта прихована в меню ігор та під час гри.
+    updateSeasonVisibility();
     gameOverlay.setBackgroundColor(0xFF21452B);
     ImageView bg=gameImage("Games","background.png");bg.setScaleType(ImageView.ScaleType.CENTER_CROP);
     gameOverlay.addView(bg,new FrameLayout.LayoutParams(-1,-1));
-    if(topPanel!=null)topPanel.setVisibility(View.GONE);
+    if(topPanel!=null){topPanel.setVisibility(View.VISIBLE);topPanel.bringToFront();}
     // Таймер бездіяльності працює приховано: не додаємо лічильник на екран.
     gameTimerLabel=null;
     gameResetIdle();
@@ -1407,6 +1513,7 @@ public class MainActivity extends Activity {
     handler.removeCallbacks(gameIdle);stopGameSound();
     if(gameOverlay!=null){root.removeView(gameOverlay);gameOverlay=null;}
     applyAlertAppearance(); // Після виходу повертаємо карту лише до відео.
+    updateSeasonVisibility();
     gameMode=-1;gameTimerLabel=null;gameFinished=false;gameBusy=false;
     if(topPanel!=null)topPanel.setVisibility(View.VISIBLE);
     if(!siteOpen&&!birthdayShowing&&video!=null&&!playlist.isEmpty())video.start();
@@ -1746,10 +1853,10 @@ public class MainActivity extends Activity {
       birthdayMusic.setVolume(volume,volume);birthdayMusic.prepare();birthdayMusic.start();
     }catch(Exception ex){stopBirthdayMusic();}
   }
-  private void showNextBirthday(){if(siteOpen){stopBirthdayMusic();birthdayShowing=false;applyAlertAppearance();if(birthdayOverlay!=null){root.removeView(birthdayOverlay);birthdayOverlay=null;}return;}if(birthdayQueueIndex>=birthdayQueue.size()){
+  private void showNextBirthday(){if(siteOpen){stopBirthdayMusic();birthdayShowing=false;applyAlertAppearance();if(birthdayOverlay!=null){root.removeView(birthdayOverlay);birthdayOverlay=null;}updateSeasonVisibility();return;}if(birthdayQueueIndex>=birthdayQueue.size()){
       if(birthdayOverlay!=null){root.removeView(birthdayOverlay);birthdayOverlay=null;}
-      stopBirthdayMusic();birthdayShowing=false;applyAlertAppearance();if(!siteOpen&&video!=null&&!playlist.isEmpty())video.start();return;}
-    birthdayShowing=true;applyAlertAppearance();if(video!=null&&video.isPlaying())video.pause();
+      stopBirthdayMusic();birthdayShowing=false;applyAlertAppearance();updateSeasonVisibility();if(!siteOpen&&video!=null&&!playlist.isEmpty())video.start();return;}
+    birthdayShowing=true;applyAlertAppearance();updateSeasonVisibility();if(video!=null&&video.isPlaying())video.pause();
     startBirthdayMusic();
     currentBirthdayDeferred=birthdayDeferred.size()>birthdayQueueIndex&&birthdayDeferred.get(birthdayQueueIndex);
     Person p=birthdayQueue.get(birthdayQueueIndex++);int age=Calendar.getInstance().get(Calendar.YEAR)-p.year;
@@ -1757,9 +1864,13 @@ public class MainActivity extends Activity {
     if(birthdayOverlay!=null)root.removeView(birthdayOverlay);
     birthdayOverlay=new FrameLayout(this);birthdayOverlay.setBackgroundColor(Color.BLACK);
     root.addView(birthdayOverlay,new FrameLayout.LayoutParams(-1,-1));
+    if(topPanel!=null)topPanel.bringToFront();
     Uri img=dataFile(jubilee?"jubilee.png":"birthday.png");
     if(img!=null){try{ImageView view=new ImageView(this);view.setImageURI(img);view.setScaleType(ImageView.ScaleType.FIT_CENTER);
       birthdayOverlay.addView(view,new FrameLayout.LayoutParams(-1,-1));}catch(Exception ignored){}}
+    SeasonOverlayView birthdayParticles=new SeasonOverlayView(this);
+    birthdayOverlay.addView(birthdayParticles,new FrameLayout.LayoutParams(-1,-1));
+    birthdayParticles.setVisibility(getPreferences(0).getBoolean("season_enabled",false)&&!silenceActive?View.VISIBLE:View.GONE);
      // Координати прив'язані до оригінальних PNG 1536x1024 та FIT_CENTER.
      // Підкладок немає: лише текст безпосередньо поверх світлого поля.
      final FrameLayout target=birthdayOverlay;
