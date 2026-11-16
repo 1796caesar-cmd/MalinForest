@@ -1112,9 +1112,9 @@ public class MainActivity extends Activity {
           });
           new AlertDialog.Builder(this).setTitle("Розмір сезонних частинок")
             .setView(box)
-            .setNeutralButton("100%",(d,w)->{p.edit().putInt("season_size",100).apply();seasonSettings();})
-            .setNegativeButton("Скасувати",(d,w)->seasonSettings())
-            .setPositiveButton("Зберегти",(d,w)->{
+            .setNeutralButton("100%",(d,buttonId)->{p.edit().putInt("season_size",100).apply();seasonSettings();})
+            .setNegativeButton("Скасувати",(d,buttonId)->seasonSettings())
+            .setPositiveButton("Зберегти",(d,buttonId)->{
               p.edit().putInt("season_size",sizeBar.getProgress()+50).apply();
               seasonSettings();
             }).show();
