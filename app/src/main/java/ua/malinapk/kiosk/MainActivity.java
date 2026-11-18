@@ -79,6 +79,24 @@ public class MainActivity extends Activity {
   private SeasonOverlayView seasonVideoOverlay;
   private long lastTouch;
   private String cachedNews="";
+  private static class ScreenNews {
+    String id,title,description,image,source,date;
+    ScreenNews(String i,String t,String d,String im,String so,String da){
+      id=i;title=t;description=d;image=im;source=so;date=da;
+    }
+  }
+  private final ArrayList<ScreenNews> screenNews=new ArrayList<>();
+  private final HashSet<String> displayedNewsIds=new HashSet<>();
+  private FrameLayout screenNewsPanel;
+  private boolean screenNewsShowing=false;
+  private int completedVideosSinceNews=0;
+  private long newsRefreshAt=0;
+  private final Runnable closeScreenNews=()->finishScreenNews();
+  private final Runnable newsPoll=new Runnable(){@Override public void run(){
+    if(getPreferences(0).getBoolean("screen_news_enabled",false))refreshScreenNews();
+    handler.postDelayed(this,5*60*1000L);
+  }};
+
   private String pendingNews=null;
   private String holidayDate="";
   private Uri dataFolder;
@@ -166,6 +184,7 @@ public class MainActivity extends Activity {
     empty=label("",19,false);empty.setGravity(Gravity.CENTER);
     empty.setPadding(dp(20),dp(20),dp(20),dp(20));
     videoLayer.addView(empty,new FrameLayout.LayoutParams(-1,-1));
+    setupScreenNewsPanel();
     seasonVideoOverlay=new SeasonOverlayView(this);
     videoLayer.addView(seasonVideoOverlay,new FrameLayout.LayoutParams(-1,-1));
 
@@ -274,7 +293,7 @@ public class MainActivity extends Activity {
     updateVisibility();
     setupAlertTile();
     updateSeasonVisibility();
-    handler.post(tick);handler.post(refresh);handler.postDelayed(rotateHoliday,topIntervalSeconds()*1000L);
+    handler.post(tick);handler.post(refresh);handler.post(newsPoll);handler.postDelayed(rotateHoliday,topIntervalSeconds()*1000L);
   }
 
   // Забороняємо відкривати соцмережі, включно з їхніми deep-link адресами.
@@ -494,16 +513,28 @@ public class MainActivity extends Activity {
   private void showEmpty(){video.setVisibility(View.GONE);empty.setVisibility(View.VISIBLE);
     empty.setText("Відео ще не додано\n\nУтримуйте верхню панель, щоб вибрати папку Movies/ForestKiosk");}
   private void playCurrent(){
-    if(siteOpen)return;if(playlist.isEmpty()){showEmpty();return;}
+    if(siteOpen||screenNewsShowing)return;if(playlist.isEmpty()){showEmpty();return;}
     video.setVisibility(View.VISIBLE);empty.setVisibility(View.GONE);
     video.setVideoDimensions(0,0);video.setVideoURI(playlist.get(index%playlist.size()));
     video.setOnPreparedListener(mp->{video.setVideoDimensions(mp.getVideoWidth(),mp.getVideoHeight());
       if(!siteOpen){boolean sound=getPreferences(0).getBoolean("sound",false);
         currentVideoPlayer=mp;float v=getPreferences(0).getInt("video_volume",sound?100:0)/100f;mp.setVolume(v,v);video.start();}});
   }
-  private void playNext(){if(playlist.isEmpty()||siteOpen)return;index=(index+1)%playlist.size();lastPosition=0;playCurrent();}
+  private void playNext(){
+    if(playlist.isEmpty()||siteOpen)return;
+    index=(index+1)%playlist.size();lastPosition=0;
+    completedVideosSinceNews++;
+    int interval=Math.max(1,Math.min(10,getPreferences(0).getInt("screen_news_interval",3)));
+    if(getPreferences(0).getBoolean("screen_news_enabled",false)
+        &&completedVideosSinceNews>=interval&&!silenceActive&&!birthdayShowing&&gameOverlay==null
+        &&!screenNews.isEmpty()){
+      showScreenNews();
+    }else playCurrent();
+  }
   private void showSite(){
-    if(siteOpen||birthdayShowing)return;siteOpen=true;lastPosition=video.getCurrentPosition();
+    if(siteOpen||birthdayShowing)return;
+    if(screenNewsShowing)finishScreenNews();
+    siteOpen=true;lastPosition=video.getCurrentPosition();
     if(video.isPlaying())video.pause();videoLayer.setVisibility(View.GONE);
     updateSeasonVisibility();
     applyAlertAppearance(); // Карта прихована, поки відвідувач переглядає сайт.
@@ -605,6 +636,7 @@ public class MainActivity extends Activity {
   }
   private void startSilence(String today){
     if(root==null)return;
+    if(screenNewsShowing)finishScreenNews();
     lastSilenceDay=today;silenceActive=true;
     updateSeasonVisibility();
     applyAlertAppearance();
@@ -1033,26 +1065,225 @@ public class MainActivity extends Activity {
   }
   private void elementsSettings(){
     String[] names={"Кнопка інтерактивних ігор","Налаштування карти","Іменинники",
-      "Свята","Онлайн-новини","Факти з Excel","Сезонні ефекти"};
-    String[] keys={"games",null,"birthdays","holidays","news","facts",null};
+      "Свята","Онлайн-новини","Факти з Excel","Сезонні ефекти","Новини між відео"};
+    String[] keys={"games",null,"birthdays","holidays","news","facts",null,null};
     String[] opts=new String[names.length];
     for(int i=0;i<names.length;i++){
-      if(i==1||i==6){opts[i]=names[i]+"  ›";continue;}
+      if(i==1||i==6||i==7){opts[i]=names[i]+"  ›";continue;}
       opts[i]=(enabled(keys[i])?"☑  ":"☐  ")+names[i];
     }
     new AlertDialog.Builder(this).setTitle("Відображення елементів")
       .setItems(opts,(d,w)->{
         if(w==1){alertSettings();return;}
         if(w==6){seasonSettings();return;}
+        if(w==7){screenNewsSettings();return;}
         getPreferences(0).edit().putBoolean(keys[w],!enabled(keys[w])).apply();
         updateVisibility();elementsSettings();
       }).setNegativeButton("Назад",(d,w)->settings()).show();
   }
 
+
+  private void screenNewsSettings(){
+    final android.content.SharedPreferences p=getPreferences(0);
+    String[] options={
+      (p.getBoolean("screen_news_enabled",false)?"☑":"☐")+" Показувати новини між відео",
+      "Кількість відео: "+p.getInt("screen_news_interval",3),
+      "Час показу: "+p.getInt("screen_news_seconds",60)+" с",
+      "Оновити новини зараз"
+    };
+    new AlertDialog.Builder(this).setTitle("Новини між відео")
+      .setItems(options,(dialog,which)->{
+        if(which==0){
+          boolean enabled=!p.getBoolean("screen_news_enabled",false);
+          p.edit().putBoolean("screen_news_enabled",enabled).apply();
+          if(enabled)refreshScreenNews();
+          else if(screenNewsShowing)finishScreenNews();
+          screenNewsSettings();
+        }else if(which==1){
+          String[] labels={"1 відео","2 відео","3 відео","5 відео","10 відео"};
+          int[] values={1,2,3,5,10};
+          new AlertDialog.Builder(this).setTitle("Показувати новину через")
+            .setItems(labels,(d,i)->{p.edit().putInt("screen_news_interval",values[i]).apply();screenNewsSettings();})
+            .setNegativeButton("Назад",(d,i)->screenNewsSettings()).show();
+        }else if(which==2){
+          String[] labels={"30 секунд","1 хвилина","1 хвилина 30 секунд","2 хвилини","3 хвилини"};
+          int[] values={30,60,90,120,180};
+          new AlertDialog.Builder(this).setTitle("Тривалість показу новини")
+            .setItems(labels,(d,i)->{p.edit().putInt("screen_news_seconds",values[i]).apply();screenNewsSettings();})
+            .setNegativeButton("Назад",(d,i)->screenNewsSettings()).show();
+        }else{
+          refreshScreenNews();Toast.makeText(this,"Оновлюємо новини…",Toast.LENGTH_SHORT).show();
+          screenNewsSettings();
+        }
+      }).setNegativeButton("Назад",(d,w)->elementsSettings()).show();
+  }
+
+  private void setupScreenNewsPanel(){
+    screenNewsPanel=new FrameLayout(this);
+    screenNewsPanel.setBackgroundColor(0xFF10261B);
+    screenNewsPanel.setVisibility(View.GONE);
+    videoLayer.addView(screenNewsPanel,new FrameLayout.LayoutParams(-1,-1));
+  }
+
+  private String extractMeta(String html,String property){
+    java.util.regex.Matcher tag=java.util.regex.Pattern.compile("(?is)<meta\\b[^>]*>").matcher(html);
+    while(tag.find()){
+      String t=tag.group();
+      if(!t.matches("(?is).*(?:name|property)\\s*=\\s*['\\\"]"+java.util.regex.Pattern.quote(property)+"['\\\"].*"))continue;
+      java.util.regex.Matcher value=java.util.regex.Pattern.compile("(?is)content\\s*=\\s*['\\\"]([^'\\\"]*)['\\\"]").matcher(t);
+      if(value.find())return plain(value.group(1));
+    }
+    return "";
+  }
+  private String absoluteNewsUrl(String href){
+    if(href.startsWith("https://malinapk.net/"))return href;
+    if(href.startsWith("/"))return "https://malinapk.net"+href;
+    if(href.startsWith("novini/"))return "https://malinapk.net/"+href;
+    return "";
+  }
+  private void refreshScreenNews(){
+    long now=System.currentTimeMillis();
+    if(now-newsRefreshAt<30000)return;
+    newsRefreshAt=now;
+    new Thread(()->{
+      final ArrayList<ScreenNews> fresh=new ArrayList<>();
+      try{
+        String html=fetch("https://malinapk.net/novini.html");
+        java.util.regex.Matcher links=java.util.regex.Pattern.compile(
+          "(?is)<a\\b[^>]*href\\s*=\\s*['\\\"]([^'\\\"]*?/novini/novina/article/[^'\\\"]+?\\.html)['\\\"][^>]*>(.*?)</a>").matcher(html);
+        java.util.LinkedHashMap<String,String> articles=new java.util.LinkedHashMap<>();
+        while(links.find()){
+          String url=absoluteNewsUrl(links.group(1));
+          if(!url.isEmpty()&&!articles.containsKey(url))articles.put(url,plain(links.group(2)));
+          if(articles.size()>=20)break;
+        }
+        for(java.util.Map.Entry<String,String> entry:articles.entrySet()){
+          try{
+            String page=fetch(entry.getKey());
+            String title=extractMeta(page,"og:title");
+            if(title.isEmpty())title=entry.getValue();
+            if(title.isEmpty()){
+              java.util.regex.Matcher heading=java.util.regex.Pattern.compile("(?is)<h1[^>]*>(.*?)</h1>").matcher(page);
+              if(heading.find())title=plain(heading.group(1));
+            }
+            if(title.isEmpty())continue;
+            String description=extractMeta(page,"og:description");
+            if(description.isEmpty())description=extractMeta(page,"description");
+            if(description.isEmpty()){
+              java.util.regex.Matcher body=java.util.regex.Pattern.compile("(?is)<(?:div|section)[^>]*class=['\\\"][^'\\\"]*(?:news-single|article|news-text)[^'\\\"]*['\\\"][^>]*>(.*?)</(?:div|section)>").matcher(page);
+              if(body.find())description=plain(body.group(1));
+            }
+            if(description.length()>420)description=description.substring(0,417)+"…";
+            String photo=extractMeta(page,"og:image");
+            if(photo.startsWith("/"))photo="https://malinapk.net"+photo;
+            if(photo.isEmpty()){
+              java.util.regex.Matcher image=java.util.regex.Pattern.compile("(?is)<img[^>]*src=['\\\"]([^'\\\"]+)['\\\"]").matcher(page);
+              while(image.find()){
+                String candidate=image.group(1);
+                if(candidate.contains("uploads/")||candidate.contains("fileadmin/")){
+                  photo=candidate.startsWith("/")?"https://malinapk.net"+candidate:candidate;break;
+                }
+              }
+            }
+            String date="";
+            java.util.regex.Matcher dateMatch=java.util.regex.Pattern.compile("\\b(\\d{2}\\.\\d{2}\\.20\\d{2})\\b").matcher(page);
+            if(dateMatch.find())date=dateMatch.group(1);
+            fresh.add(new ScreenNews(entry.getKey(),title,description,photo,"MALINAPK.NET",date));
+          }catch(Exception ignored){}
+        }
+      }catch(Exception ignored){}
+      if(!fresh.isEmpty())runOnUiThread(()->{
+        screenNews.clear();screenNews.addAll(fresh);
+        HashSet<String> current=new HashSet<>();
+        for(ScreenNews n:fresh)current.add(n.id);
+        displayedNewsIds.retainAll(current);
+      });
+    }).start();
+  }
+  private void showScreenNews(){
+    if(screenNewsShowing||screenNews.isEmpty())return;
+    ScreenNews selected=null;
+    for(ScreenNews item:screenNews)if(!displayedNewsIds.contains(item.id)){selected=item;break;}
+    if(selected==null){displayedNewsIds.clear();selected=screenNews.get(0);}
+    displayedNewsIds.add(selected.id);
+    completedVideosSinceNews=0;
+    screenNewsShowing=true;
+    video.pause();
+    screenNewsPanel.removeAllViews();
+    screenNewsPanel.setVisibility(View.VISIBLE);
+    screenNewsPanel.bringToFront();
+    updateSeasonVisibility();
+    if(prompt!=null)prompt.setVisibility(View.GONE);
+
+    LinearLayout outer=new LinearLayout(this);
+    outer.setOrientation(LinearLayout.VERTICAL);
+    outer.setPadding(dp(35),dp(105),dp(35),dp(65));
+    screenNewsPanel.addView(outer,new FrameLayout.LayoutParams(-1,-1));
+
+    TextView ribbon=label("  ЛІСОВІ НОВИНИ  •  "+selected.source+"  •  "+selected.date+"  ",15,true);
+    ribbon.setTextColor(0xFFFFD992);ribbon.setBackgroundColor(0xFF244936);
+    ribbon.setPadding(dp(12),dp(10),dp(12),dp(10));
+    outer.addView(ribbon,new LinearLayout.LayoutParams(-1,-2));
+
+    LinearLayout body=new LinearLayout(this);
+    body.setOrientation(LinearLayout.HORIZONTAL);
+    body.setGravity(Gravity.CENTER_VERTICAL);
+    LinearLayout.LayoutParams bodyParams=new LinearLayout.LayoutParams(-1,0,1);
+    bodyParams.topMargin=dp(20);outer.addView(body,bodyParams);
+
+    LinearLayout left=new LinearLayout(this);
+    left.setOrientation(LinearLayout.VERTICAL);
+    left.setGravity(Gravity.CENTER_VERTICAL);
+    left.setPadding(dp(12),0,dp(20),0);
+    body.addView(left,new LinearLayout.LayoutParams(0,-1,1.05f));
+    TextView headline=label(selected.title,Math.min(30,Math.max(22,30-selected.title.length()/45)),true);
+    headline.setMaxLines(5);
+    left.addView(headline);
+    TextView summary=label(selected.description,18,false);
+    summary.setTextColor(0xFFDEECE2);summary.setMaxLines(9);
+    LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-1,-2);sp.topMargin=dp(18);
+    left.addView(summary,sp);
+
+    FrameLayout photoHolder=new FrameLayout(this);
+    photoHolder.setBackgroundColor(0xFF244936);
+    body.addView(photoHolder,new LinearLayout.LayoutParams(0,-1,1f));
+    ImageView photo=new ImageView(this);
+    photo.setScaleType(ImageView.ScaleType.CENTER_CROP);
+    photoHolder.addView(photo,new FrameLayout.LayoutParams(-1,-1));
+    if(selected.image!=null&&selected.image.startsWith("https://")){
+      String url=selected.image;
+      new Thread(()->{
+        try{
+          HttpURLConnection connection=(HttpURLConnection)new URL(url).openConnection();
+          connection.setConnectTimeout(7000);connection.setReadTimeout(7000);
+          try(InputStream stream=connection.getInputStream()){
+            final android.graphics.Bitmap bmp=android.graphics.BitmapFactory.decodeStream(stream);
+            if(bmp!=null)runOnUiThread(()->{if(screenNewsShowing)photo.setImageBitmap(bmp);});
+          }finally{connection.disconnect();}
+        }catch(Exception ignored){}
+      }).start();
+    }
+    screenNewsPanel.setAlpha(0f);
+    screenNewsPanel.animate().alpha(1f).setDuration(450).start();
+    int seconds=Math.max(15,Math.min(300,getPreferences(0).getInt("screen_news_seconds",60)));
+    handler.removeCallbacks(closeScreenNews);
+    handler.postDelayed(closeScreenNews,seconds*1000L);
+  }
+  private void finishScreenNews(){
+    if(!screenNewsShowing)return;
+    screenNewsShowing=false;
+    handler.removeCallbacks(closeScreenNews);
+    screenNewsPanel.setVisibility(View.GONE);
+    screenNewsPanel.removeAllViews();
+    if(prompt!=null)prompt.setVisibility(View.VISIBLE);
+    updateSeasonVisibility();
+    if(!siteOpen&&!birthdayShowing&&!silenceActive&&gameOverlay==null)playCurrent();
+  }
+
   private void updateSeasonVisibility(){
     if(seasonVideoOverlay==null)return;
     boolean on=getPreferences(0).getBoolean("season_enabled",false);
-    boolean videoVisible=!siteOpen&&!birthdayShowing&&!silenceActive&&gameOverlay==null;
+    boolean videoVisible=!siteOpen&&!screenNewsShowing&&!birthdayShowing&&!silenceActive&&gameOverlay==null;
     seasonVideoOverlay.setVisibility(on&&videoVisible?View.VISIBLE:View.GONE);
     if(birthdayOverlay!=null){
       for(int i=0;i<birthdayOverlay.getChildCount();i++){
@@ -1482,7 +1713,7 @@ public class MainActivity extends Activity {
   @Override protected void onResume(){super.onResume();immersive();
     if(!silenceActive&&!siteOpen&&video!=null&&!playlist.isEmpty()&&!video.isPlaying())video.start();}
   @Override protected void onPause(){if(video!=null&&video.isPlaying())video.pause();super.onPause();}
-  @Override protected void onDestroy(){unregisterUpdateReceiver();dismissUpdateProgress();handler.removeCallbacksAndMessages(null);
+  @Override protected void onDestroy(){handler.removeCallbacks(newsPoll);handler.removeCallbacks(closeScreenNews);unregisterUpdateReceiver();dismissUpdateProgress();handler.removeCallbacksAndMessages(null);
     endSilence();handler.removeCallbacks(gameIdle);handler.removeCallbacks(tickerFrame);if(tickerText!=null)tickerText.clearAnimation();if(web!=null)web.destroy();if(alertWeb!=null)alertWeb.destroy();stopBirthdayMusic();stopGameSound();super.onDestroy();}
   // Ігри читають картинки з уже вибраної папки MalinForest через SAF.
   private Uri gameFile(String... parts){
