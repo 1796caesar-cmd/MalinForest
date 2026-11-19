@@ -1124,6 +1124,7 @@ public class MainActivity extends Activity {
       "Кількість відео: "+p.getInt("screen_news_interval",3),
       "Час показу: "+p.getInt("screen_news_seconds",60)+" с",
       "Час одного фото: "+p.getInt("screen_news_photo_seconds",10)+" с",
+      (p.getBoolean("screen_news_games_button",false)?"☑":"☐")+" Кнопка ігор під час новини",
       "Оновити новини зараз",
       "Стан: "+p.getString("screen_news_status","Ще не перевірено")
     };
@@ -1183,6 +1184,11 @@ public class MainActivity extends Activity {
               screenNewsSettings();
             }).setNegativeButton("Скасувати",(d,w)->screenNewsSettings()).show();
         }else if(which==4){
+          p.edit().putBoolean("screen_news_games_button",!p.getBoolean("screen_news_games_button",false)).apply();
+          if(screenNewsShowing&&gamesButton!=null)
+            gamesButton.setVisibility(enabled("games")&&p.getBoolean("screen_news_games_button",false)?View.VISIBLE:View.GONE);
+          screenNewsSettings();
+        }else if(which==5){
           refreshScreenNews();Toast.makeText(this,"Оновлюємо новини…",Toast.LENGTH_SHORT).show();
           screenNewsSettings();
         }
@@ -1295,7 +1301,8 @@ public class MainActivity extends Activity {
   }
 
   private String articlePlain(String html){
-    String t=html.replaceAll("(?is)<(?:script|style|noscript|form|button|iframe)\\b[^>]*>.*?</(?:script|style|noscript|form|button|iframe)>"," ");
+    String t=html.replaceAll("(?is)<(?:script|style|noscript|form|button|iframe|nav|footer|aside)\\b[^>]*>.*?</(?:script|style|noscript|form|button|iframe|nav|footer|aside)>"," ");
+    t=t.replaceAll("(?is)<img\\b[^>]*>"," ");
     t=t.replaceAll("(?i)<br\\s*/?>","\n");
     t=t.replaceAll("(?i)</(?:p|div|h[1-6]|li|blockquote|section)\\s*>","\n\n");
     t=Html.fromHtml(t,Html.FROM_HTML_MODE_LEGACY).toString();
@@ -1507,7 +1514,20 @@ public class MainActivity extends Activity {
           }
         }
         ArrayList<String> photos=articlePhotos(article,html,item.id,item.image);
-        final String full=content;
+        // Clean navigation, duplicate title and missing-image markers from article text.
+        content=content.replaceAll("(?im)^\\s*(?:[<«]?\\s*Попередня новина|Наступна новина\\s*[>»]?)\\s*$","");
+        content=content.replaceAll("(?im)^\\s*(?:\\[?об.?\\]?|🖼|￼)\\s*$","");
+        String repeatedTitle=item.title==null?"":item.title.trim();
+        if(!repeatedTitle.isEmpty()){
+          String normalizedTitle=repeatedTitle.replaceAll("[\\s!?.:«»\"'–—-]+","");
+          StringBuilder clean=new StringBuilder();
+          for(String line:content.split("\\n",-1)){
+            if(line.trim().replaceAll("[\\s!?.:«»\"'–—-]+","").equalsIgnoreCase(normalizedTitle))continue;
+            clean.append(line).append('\n');
+          }
+          content=clean.toString().trim();
+        }
+        final String full=content.replaceAll("\\n{3,}","\\n\\n").trim();
         runOnUiThread(()->{
           if(!screenNewsShowing||screenNewsText==null||!item.title.equals(screenNewsTitle))return;
           if(!full.isEmpty()){
@@ -1541,7 +1561,10 @@ public class MainActivity extends Activity {
     screenNewsPanel.bringToFront();
     screenNewsPanel.setOnClickListener(v->showSite());
     updateSeasonVisibility();
-    if(gamesButton!=null)gamesButton.setVisibility(View.GONE);
+    if(gamesButton!=null){
+      gamesButton.setVisibility(enabled("games")&&getPreferences(0).getBoolean("screen_news_games_button",false)?View.VISIBLE:View.GONE);
+      gamesButton.bringToFront();
+    }
     if(prompt!=null){prompt.setVisibility(View.VISIBLE);prompt.bringToFront();}
 
     LinearLayout outer=new LinearLayout(this);
