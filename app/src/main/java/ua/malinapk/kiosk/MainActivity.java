@@ -88,6 +88,8 @@ public class MainActivity extends Activity {
   private final ArrayList<ScreenNews> screenNews=new ArrayList<>();
   private final HashSet<String> displayedNewsIds=new HashSet<>();
   private FrameLayout screenNewsPanel;
+  private WebView screenNewsText;
+  private String screenNewsTitle="", screenNewsBody="";
   private boolean screenNewsShowing=false;
   private int completedVideosSinceNews=0;
   private long newsRefreshAt=0;
@@ -533,7 +535,7 @@ public class MainActivity extends Activity {
   }
   private void showSite(){
     if(siteOpen||birthdayShowing)return;
-    if(screenNewsShowing){screenNewsShowing=false;handler.removeCallbacks(closeScreenNews);screenNewsPanel.setVisibility(View.GONE);screenNewsPanel.removeAllViews();}
+    if(screenNewsShowing){screenNewsShowing=false;handler.removeCallbacks(closeScreenNews);screenNewsPanel.setVisibility(View.GONE);screenNewsPanel.removeAllViews();screenNewsText=null;}
     siteOpen=true;lastPosition=video.getCurrentPosition();
     if(video.isPlaying())video.pause();videoLayer.setVisibility(View.GONE);
     updateSeasonVisibility();
@@ -786,8 +788,8 @@ public class MainActivity extends Activity {
             int nh=Math.round(nw/ratio);if(nh>root.getHeight()-lp.topMargin){nh=root.getHeight()-lp.topMargin;nw=Math.round(nh*ratio);}
             lp.width=nw;lp.height=nh;
           }else{lp.leftMargin=Math.max(0,Math.min(root.getWidth()-lp.width,x+dx));lp.topMargin=Math.max(0,Math.min(root.getHeight()-lp.height,y+dy));}
-          alertTile.setLayoutParams(lp);return true;}
-        if(e.getAction()==MotionEvent.ACTION_UP){alertSaveBounds();return true;}return true;
+          alertTile.setLayoutParams(lp);if(screenNewsShowing)handler.post(()->updateNewsTextFlow());return true;}
+        if(e.getAction()==MotionEvent.ACTION_UP){alertSaveBounds();if(screenNewsShowing)handler.post(()->updateNewsTextFlow());return true;}return true;
       }};
     edit.setOnTouchListener(move);resize.setOnTouchListener(move);
     View.OnLongClickListener toggleEdit=v->{alertEditing=!alertEditing;edit.setVisibility(alertEditing?View.VISIBLE:View.GONE);
@@ -806,6 +808,7 @@ public class MainActivity extends Activity {
     int opacity=getPreferences(0).getInt("alert_opacity",50);
     if(style.equals("none")){alertTile.setBackgroundColor(Color.TRANSPARENT);alertTile.setElevation(0);}
     else{alertTile.setBackground(bg(Color.argb(style.equals("border")?20:Math.round(opacity*2.55f),10,22,28),12));alertTile.setElevation(dp(3));}
+    if(screenNewsShowing)handler.post(()->updateNewsTextFlow());
     // WebView відображає сайт із власним фоном: прозорість підкладки не робить сайт прозорим.
     handler.removeCallbacks(alertRefresh);
     if(show&&!silenceActive&&!siteOpen&&!birthdayShowing&&gameOverlay==null)handler.post(alertRefresh);
@@ -1285,6 +1288,63 @@ public class MainActivity extends Activity {
       });
     }).start();
   }
+  private void updateNewsTextFlow(){
+    if(!screenNewsShowing||screenNewsText==null||screenNewsText.getWidth()<=0)return;
+    int width=screenNewsText.getWidth(),height=screenNewsText.getHeight();
+    int floatWidth=0,floatTop=0,floatHeight=0;
+    String side="left";
+    if(alertTile!=null&&alertTile.getVisibility()==View.VISIBLE&&height>0){
+      int[] textPos=new int[2],mapPos=new int[2];
+      screenNewsText.getLocationOnScreen(textPos);
+      alertTile.getLocationOnScreen(mapPos);
+      int left=mapPos[0]-textPos[0],top=mapPos[1]-textPos[1];
+      int right=left+alertTile.getWidth(),bottom=top+alertTile.getHeight();
+      if(right>0&&left<width&&bottom>0&&top<height){
+        int gap=dp(12);
+        // A CSS float reserves only the occupied area; the remaining lines flow around it.
+        if(left+right<width){side="left";floatWidth=Math.min(width,Math.max(0,right+gap));}
+        else{side="right";floatWidth=Math.min(width,Math.max(0,width-left+gap));}
+        floatTop=Math.max(0,top);
+        floatHeight=Math.min(height-floatTop,Math.max(0,bottom-floatTop+gap));
+      }
+    }
+    float density=getResources().getDisplayMetrics().density;
+    String floatHtml="";
+    if(floatWidth>0&&floatHeight>0){
+      floatHtml="<div style='float:"+side+";width:"+(floatWidth/density)+"px;height:"+(floatHeight/density)+"px;margin-top:"+(floatTop/density)+"px'></div>";
+    }
+    String title=android.text.TextUtils.htmlEncode(screenNewsTitle);
+    String body=android.text.TextUtils.htmlEncode(screenNewsBody).replace("\n","<br>");
+    String html="<!doctype html><html lang='uk'><head><meta name='viewport' content='width=device-width,initial-scale=1,user-scalable=no'>"
+      +"<style>html,body{margin:0;padding:0;background:transparent;color:#f4f8f3;font-family:sans-serif;}"
+      +"body{padding:8px 16px 12px 8px;box-sizing:border-box;}h1{font-size:27px;line-height:1.22;margin:0 0 18px;font-weight:700;}"
+      +"p{font-size:19px;line-height:1.42;margin:0;white-space:normal;}div{box-sizing:border-box;}</style></head><body>"
+      +floatHtml+"<h1>"+title+"</h1><p>"+body+"</p></body></html>";
+    screenNewsText.loadDataWithBaseURL("https://malinapk.net/",html,"text/html","UTF-8",null);
+  }
+
+  private void loadFullNewsText(ScreenNews item){
+    if(item.id==null||!item.id.startsWith("https://malinapk.net/"))return;
+    new Thread(()->{
+      try{
+        String html=fetch(item.id);
+        String content="";
+        java.util.regex.Matcher m=java.util.regex.Pattern.compile(
+          "(?is)<(?:div|section|article)\\b[^>]*(?:itemprop\\s*=\\s*['\"]articleBody['\"]|class\\s*=\\s*['\"][^'\"]*(?:article-content|article-body|entry-content|news-content|itemFullText)[^'\"]*['\"])[^>]*>(.*?)</(?:div|section|article)>").matcher(html);
+        if(m.find())content=plain(m.group(1));
+        if(content.length()<item.description.length()+30){
+          // Avoid replacing the summary with page navigation or unrelated text.
+          return;
+        }
+        if(content.length()>9000)content=content.substring(0,9000);
+        final String full=content;
+        runOnUiThread(()->{if(screenNewsShowing&&screenNewsText!=null&&item.title.equals(screenNewsTitle)){
+          screenNewsBody=full;updateNewsTextFlow();
+        }});
+      }catch(Exception ignored){}
+    }).start();
+  }
+
   private void showScreenNews(){
     if(screenNewsShowing||screenNews.isEmpty())return;
     ScreenNews selected=null;
@@ -1326,29 +1386,31 @@ public class MainActivity extends Activity {
 
     LinearLayout body=new LinearLayout(this);
     body.setOrientation(LinearLayout.HORIZONTAL);
-    body.setGravity(Gravity.CENTER_VERTICAL);
+    body.setGravity(Gravity.TOP);
     LinearLayout.LayoutParams bodyParams=new LinearLayout.LayoutParams(-1,0,1);
     bodyParams.topMargin=dp(20);outer.addView(body,bodyParams);
 
-    LinearLayout left=new LinearLayout(this);
-    left.setOrientation(LinearLayout.VERTICAL);
-    left.setGravity(Gravity.CENTER_VERTICAL);
-    left.setPadding(dp(12),0,dp(20),0);
-    body.addView(left,new LinearLayout.LayoutParams(0,-1,1.05f));
-    TextView headline=label(selected.title,Math.min(30,Math.max(22,30-selected.title.length()/45)),true);
-    headline.setMaxLines(5);
-    left.addView(headline);
-    TextView summary=label(selected.description,18,false);
-    summary.setTextColor(0xFFDEECE2);summary.setMaxLines(9);
-    LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-1,-2);sp.topMargin=dp(18);
-    left.addView(summary,sp);
+    screenNewsTitle=selected.title;
+    screenNewsBody=selected.description;
+    screenNewsText=new WebView(this);
+    screenNewsText.setBackgroundColor(Color.TRANSPARENT);
+    screenNewsText.getSettings().setJavaScriptEnabled(false);
+    screenNewsText.getSettings().setDefaultTextEncodingName("UTF-8");
+    screenNewsText.setVerticalScrollBarEnabled(false);
+    screenNewsText.setOnTouchListener((v,e)->{
+      if(e.getAction()==MotionEvent.ACTION_UP){showSite();return true;}
+      return true;
+    });
+    body.addView(screenNewsText,new LinearLayout.LayoutParams(0,-1,1.05f));
+    screenNewsText.post(()->updateNewsTextFlow());
+    loadFullNewsText(selected);
 
     FrameLayout photoHolder=new FrameLayout(this);
     photoHolder.setBackgroundColor(0x55244936);
     photoHolder.setOnClickListener(v->showSite());
     body.addView(photoHolder,new LinearLayout.LayoutParams(0,-1,1f));
     ImageView photo=new ImageView(this);
-    photo.setScaleType(ImageView.ScaleType.CENTER_CROP);
+    photo.setScaleType(ImageView.ScaleType.FIT_CENTER);
     photoHolder.addView(photo,new FrameLayout.LayoutParams(-1,-1));
     loadNewsPhoto(photo,selected);
     // Keep the animated touch prompt above the news card.
@@ -1365,6 +1427,7 @@ public class MainActivity extends Activity {
     handler.removeCallbacks(closeScreenNews);
     screenNewsPanel.setVisibility(View.GONE);
     screenNewsPanel.removeAllViews();
+    screenNewsText=null;
     if(prompt!=null)prompt.setVisibility(View.VISIBLE);
     if(gamesButton!=null)gamesButton.setVisibility(enabled("games")?View.VISIBLE:View.GONE);
     updateSeasonVisibility();
