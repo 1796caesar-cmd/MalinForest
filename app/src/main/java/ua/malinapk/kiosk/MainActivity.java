@@ -1330,26 +1330,6 @@ public class MainActivity extends Activity {
     return t;
   }
 
-  private ArrayList<String> articlePhotos(String articleHtml,String page,String url,String rssImage){
-    java.util.LinkedHashSet<String> found=new java.util.LinkedHashSet<>();
-    Matcher imgs=Pattern.compile("(?is)<img\\b[^>]*>").matcher(articleHtml);
-    while(imgs.find()){
-      String tag=imgs.group();
-      Matcher attr=Pattern.compile("(?is)(?:data-src|data-original|data-lazy-src|src)\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"]").matcher(tag);
-      String chosen="";
-      while(attr.find()){
-        String value=attr.group(1);
-        if(!value.startsWith("data:")){chosen=value;break;}
-      }
-      String abs=absoluteArticleImage(chosen,url);
-      if(!abs.isEmpty())found.add(abs);
-    }
-    String cover=absoluteArticleImage(extractMeta(page,"og:image"),url);
-    if(cover.isEmpty())cover=absoluteArticleImage(rssImage,url);
-    if(!cover.isEmpty())found.add(cover);
-    return new ArrayList<>(found);
-  }
-
   private android.graphics.Bitmap fetchNewsBitmap(String url){
     HttpURLConnection c=null;
     try{
@@ -1395,24 +1375,43 @@ public class MainActivity extends Activity {
     requestNewsBitmap(url);
   }
 
+  // One cover per article, always from the article's og:image metadata.
+  // Metadata and the cover are fetched while videos are playing, never on the UI thread.
   private void prefetchUpcomingNewsPhotos(){
     int count=0;
     for(ScreenNews news:screenNews){
       if(displayedNewsIds.contains(news.id))continue;
-      if(count++>=3)break;
-      final String known=absoluteArticleImage(news.image,news.id);
-      if(!known.isEmpty())requestNewsBitmap(known);
-      else if(news.id!=null&&news.id.startsWith("https://malinapk.net/")){
-        // RSS often has no enclosure: discover the cover while video plays.
-        final String articleUrl=news.id;
-        newsImageWorkers.execute(()->{
-          try{
-            String page=fetch(articleUrl);
-            String cover=absoluteArticleImage(extractMeta(page,"og:image"),articleUrl);
-            if(!cover.isEmpty())requestNewsBitmap(cover);
-          }catch(Exception ignored){}
-        });
-      }
+      if(count++>=10)break;
+      if(news.id==null||!news.id.startsWith("https://malinapk.net/"))continue;
+      newsImageWorkers.execute(()->{
+        try{
+          String cover=absoluteArticleImage(news.image,news.id);
+          if(cover.isEmpty()){
+            String page=fetch(news.id);
+            cover=absoluteArticleImage(extractMeta(page,"og:image"),news.id);
+            if(!cover.isEmpty())news.image=cover;
+          }
+          if(!cover.isEmpty()){
+            // Download directly here to avoid blocking the same worker pool
+            // with nested requests for a bitmap.
+            boolean cached;
+            synchronized(newsImageMemory){cached=newsImageMemory.get(cover)!=null;}
+            if(!cached&&newsImagesLoading.add(cover)){
+              try{
+                android.graphics.Bitmap bmp=fetchNewsBitmap(cover);
+                if(bmp!=null){
+                  synchronized(newsImageMemory){newsImageMemory.put(cover,bmp);}
+                  final String readyUrl=cover;
+                  runOnUiThread(()->{
+                    if(screenNewsShowing&&activeNewsPhotoView!=null
+                        &&activeNewsPhotos.contains(readyUrl))activeNewsPhotoView.setImageBitmap(bmp);
+                  });
+                }
+              }finally{newsImagesLoading.remove(cover);}
+            }
+          }
+        }catch(Exception ignored){}
+      });
     }
   }
 
@@ -1423,6 +1422,23 @@ public class MainActivity extends Activity {
     if(!cover.isEmpty()){
       activeNewsPhotos.add(cover);
       displayNewsPhoto(photo,cover);
+    }else{
+      // If metadata discovery is still running, show the cover when it arrives.
+      newsImageWorkers.execute(()->{
+        try{
+          String page=fetch(news.id);
+          String discovered=absoluteArticleImage(extractMeta(page,"og:image"),news.id);
+          if(discovered.isEmpty())return;
+          news.image=discovered;
+          runOnUiThread(()->{
+            if(screenNewsShowing&&activeNewsPhotoView==photo
+                &&news.id.equals(activeScreenNewsUrl)){
+              activeNewsPhotos.clear();activeNewsPhotos.add(discovered);
+              displayNewsPhoto(photo,discovered);
+            }
+          });
+        }catch(Exception ignored){}
+      });
     }
   }
 
@@ -1580,7 +1596,6 @@ public class MainActivity extends Activity {
             if(mainText.length()>content.length())content=mainText;
           }
         }
-        ArrayList<String> photos=articlePhotos(article,html,item.id,item.image);
         // Clean navigation, duplicate title and missing-image markers from article text.
         content=content.replaceAll("(?im)^\\s*(?:[<«]?\\s*Попередня новина|Наступна новина\\s*[>»]?)\\s*$","");
         content=content.replaceAll("(?im)^\\s*(?:\\[?об.?\\]?|🖼|￼)\\s*$","");
@@ -1601,13 +1616,7 @@ public class MainActivity extends Activity {
             screenNewsBody=full;
             updateNewsTextFlow();
           }
-          if(!photos.isEmpty()&&activeNewsPhotoView!=null){
-            handler.removeCallbacks(nextNewsPhoto);
-            activeNewsPhotos.clear();activeNewsPhotos.addAll(photos);
-            activeNewsPhotoIndex=0;
-            displayNewsPhoto(activeNewsPhotoView,activeNewsPhotos.get(0));
-            if(activeNewsPhotos.size()>1)handler.postDelayed(nextNewsPhoto,newsPhotoDurationMs());
-          }
+
         });
       }catch(Exception ignored){}
     }).start();
