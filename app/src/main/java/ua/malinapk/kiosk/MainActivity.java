@@ -1089,7 +1089,8 @@ public class MainActivity extends Activity {
       (p.getBoolean("screen_news_enabled",false)?"☑":"☐")+" Показувати новини між відео",
       "Кількість відео: "+p.getInt("screen_news_interval",3),
       "Час показу: "+p.getInt("screen_news_seconds",60)+" с",
-      "Оновити новини зараз"
+      "Оновити новини зараз",
+      "Стан: "+p.getString("screen_news_status","Ще не перевірено")
     };
     new AlertDialog.Builder(this).setTitle("Новини між відео")
       .setItems(options,(dialog,which)->{
@@ -1111,7 +1112,7 @@ public class MainActivity extends Activity {
           new AlertDialog.Builder(this).setTitle("Тривалість показу новини")
             .setItems(labels,(d,i)->{p.edit().putInt("screen_news_seconds",values[i]).apply();screenNewsSettings();})
             .setNegativeButton("Назад",(d,i)->screenNewsSettings()).show();
-        }else{
+        }else if(which==3){
           refreshScreenNews();Toast.makeText(this,"Оновлюємо новини…",Toast.LENGTH_SHORT).show();
           screenNewsSettings();
         }
@@ -1147,56 +1148,70 @@ public class MainActivity extends Activity {
     newsRefreshAt=now;
     new Thread(()->{
       final ArrayList<ScreenNews> fresh=new ArrayList<>();
+      String error="";
       try{
+        // The site's official RSS is preferable to scraping links from HTML.
+        String xml=fetch("https://malinapk.net/rss.xml");
+        org.xmlpull.v1.XmlPullParser parser=android.util.Xml.newPullParser();
+        parser.setInput(new java.io.StringReader(xml));
+        boolean inItem=false;
+        String title="",link="",description="",date="",photo="";
+        int event;
+        while((event=parser.next())!=org.xmlpull.v1.XmlPullParser.END_DOCUMENT){
+          if(event==org.xmlpull.v1.XmlPullParser.START_TAG){
+            String tag=parser.getName();
+            if("item".equalsIgnoreCase(tag)){
+              inItem=true;title="";link="";description="";date="";photo="";
+            }else if(inItem){
+              if("enclosure".equalsIgnoreCase(tag)){
+                String type=parser.getAttributeValue(null,"type");
+                if(type!=null&&type.startsWith("image/"))photo=parser.getAttributeValue(null,"url");
+              }else if("title".equalsIgnoreCase(tag))title=parser.nextText();
+              else if("link".equalsIgnoreCase(tag))link=parser.nextText();
+              else if("description".equalsIgnoreCase(tag))description=parser.nextText();
+              else if("pubDate".equalsIgnoreCase(tag))date=parser.nextText();
+            }
+          }else if(event==org.xmlpull.v1.XmlPullParser.END_TAG&&"item".equalsIgnoreCase(parser.getName())&&inItem){
+            if(!link.isEmpty()&&!title.isEmpty())fresh.add(new ScreenNews(link,plain(title),plain(description),photo,"MALINAPK.NET",date));
+            inItem=false;if(fresh.size()>=30)break;
+          }
+        }
+      }catch(Exception e){error=e.getClass().getSimpleName()+": "+e.getMessage();}
+      if(fresh.isEmpty())try{
+        // Fallback: collect article URLs regardless of relative/absolute href syntax.
         String html=fetch("https://malinapk.net/novini.html");
         java.util.regex.Matcher links=java.util.regex.Pattern.compile(
-          "(?is)<a\\b[^>]*href\\s*=\\s*['\\\"]([^'\\\"]*?/novini/novina/article/[^'\\\"]+?\\.html)['\\\"][^>]*>(.*?)</a>").matcher(html);
-        java.util.LinkedHashMap<String,String> articles=new java.util.LinkedHashMap<>();
-        while(links.find()){
-          String url=absoluteNewsUrl(links.group(1));
-          if(!url.isEmpty()&&!articles.containsKey(url))articles.put(url,plain(links.group(2)));
-          if(articles.size()>=20)break;
-        }
-        for(java.util.Map.Entry<String,String> entry:articles.entrySet()){
+          "(?is)href\\s*=\\s*['\"]([^'\"]*novini/novina/article/[^'\"]+?\\.html)[^'\"]*['\"]").matcher(html);
+        java.util.LinkedHashSet<String> urls=new java.util.LinkedHashSet<>();
+        while(links.find()&&urls.size()<20)urls.add(absoluteNewsUrl(links.group(1)));
+        for(String url:urls){
           try{
-            String page=fetch(entry.getKey());
+            String page=fetch(url);
             String title=extractMeta(page,"og:title");
-            if(title.isEmpty())title=entry.getValue();
             if(title.isEmpty()){
-              java.util.regex.Matcher heading=java.util.regex.Pattern.compile("(?is)<h1[^>]*>(.*?)</h1>").matcher(page);
+              java.util.regex.Matcher heading=java.util.regex.Pattern.compile("(?is)<h[12][^>]*>(.*?)</h[12]>").matcher(page);
               if(heading.find())title=plain(heading.group(1));
             }
             if(title.isEmpty())continue;
             String description=extractMeta(page,"og:description");
             if(description.isEmpty())description=extractMeta(page,"description");
-            if(description.isEmpty()){
-              java.util.regex.Matcher body=java.util.regex.Pattern.compile("(?is)<(?:div|section)[^>]*class=['\\\"][^'\\\"]*(?:news-single|article|news-text)[^'\\\"]*['\\\"][^>]*>(.*?)</(?:div|section)>").matcher(page);
-              if(body.find())description=plain(body.group(1));
-            }
-            if(description.length()>420)description=description.substring(0,417)+"…";
             String photo=extractMeta(page,"og:image");
             if(photo.startsWith("/"))photo="https://malinapk.net"+photo;
-            if(photo.isEmpty()){
-              java.util.regex.Matcher image=java.util.regex.Pattern.compile("(?is)<img[^>]*src=['\\\"]([^'\\\"]+)['\\\"]").matcher(page);
-              while(image.find()){
-                String candidate=image.group(1);
-                if(candidate.contains("uploads/")||candidate.contains("fileadmin/")){
-                  photo=candidate.startsWith("/")?"https://malinapk.net"+candidate:candidate;break;
-                }
-              }
-            }
-            String date="";
-            java.util.regex.Matcher dateMatch=java.util.regex.Pattern.compile("\\b(\\d{2}\\.\\d{2}\\.20\\d{2})\\b").matcher(page);
-            if(dateMatch.find())date=dateMatch.group(1);
-            fresh.add(new ScreenNews(entry.getKey(),title,description,photo,"MALINAPK.NET",date));
+            if(description.length()>420)description=description.substring(0,417)+"…";
+            fresh.add(new ScreenNews(url,title,description,photo,"MALINAPK.NET",""));
           }catch(Exception ignored){}
         }
-      }catch(Exception ignored){}
-      if(!fresh.isEmpty())runOnUiThread(()->{
-        screenNews.clear();screenNews.addAll(fresh);
-        HashSet<String> current=new HashSet<>();
-        for(ScreenNews n:fresh)current.add(n.id);
-        displayedNewsIds.retainAll(current);
+      }catch(Exception e){error=e.getClass().getSimpleName()+": "+e.getMessage();}
+      final String finalError=error;
+      runOnUiThread(()->{
+        if(!fresh.isEmpty()){
+          screenNews.clear();screenNews.addAll(fresh);
+          HashSet<String> current=new HashSet<>();
+          for(ScreenNews n:fresh)current.add(n.id);
+          displayedNewsIds.retainAll(current);
+        }
+        getPreferences(0).edit().putString("screen_news_status",
+          fresh.isEmpty()?"Новин не завантажено. "+finalError:"Завантажено новин: "+fresh.size()).apply();
       });
     }).start();
   }
