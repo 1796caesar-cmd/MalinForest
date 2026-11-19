@@ -14,7 +14,7 @@ android {
         // Номер збірки збільшується автоматично в GitHub Actions.
         versionCode = Integer.parseInt(System.getenv('MALINFOREST_VERSION_CODE') ?: '1')
         // Версію для користувача змінюємо при випуску наступної версії.
-        versionName = System.getenv('MALINFOREST_VERSION_NAME') ?: '3.7'
+        versionName = System.getenv('MALINFOREST_VERSION_NAME') ?: '3.8'
     }
 
     signingConfigs {
@@ -42,7 +42,7 @@ android {
 
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
-            outputFileName = "MalinForest-${variant.versionName}.apk"
+            outputFileName = "MalinForest-v${variant.versionName}.apk"
         }
     }
 }
