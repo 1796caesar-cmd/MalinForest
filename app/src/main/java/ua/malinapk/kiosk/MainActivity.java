@@ -291,7 +291,7 @@ public class MainActivity extends Activity {
     video.setOnCompletionListener(mp->playNext());
     video.setOnErrorListener((mp,what,extra)->{handler.postDelayed(this::playNext,500);return true;});
     videoLayer.setOnClickListener(v->showSite());video.setOnClickListener(v->showSite());
-    prompt.setOnClickListener(v->showSite());empty.setOnClickListener(v->showSite());
+    prompt.setOnClickListener(v->{if(screenNewsShowing)openDisplayedNews();else showSite();});empty.setOnClickListener(v->showSite());
     prompt.setOnLongClickListener(v->{settings();return true;});
     gamesButton=label("🎮 ІНТЕРАКТИВНІ ІГРИ",17,true);gamesButton.setGravity(Gravity.CENTER);
     gamesButton.setPadding(dp(16),dp(12),dp(16),dp(12));gamesButton.setBackground(bg(0xEE226A3B,14));
@@ -356,9 +356,9 @@ public class MainActivity extends Activity {
       public void onProgressChanged(SeekBar b,int v,boolean user){value.setText(names[v]);if(user)prefs.edit().putInt("ticker_speed",v).apply();}
       public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}
     });
-    new AlertDialog.Builder(this).setTitle("Швидкість бігучої стрічки").setView(box)
+    new AlertDialog.Builder(this).setTitle("Швидкість стрічки").setView(box)
       .setPositiveButton("Зберегти",(d,w)->prefs.edit().putInt("ticker_speed",slider.getProgress()).apply())
-      .setNegativeButton("Скасувати",null).show();
+      .setNegativeButton("Назад",(d,w)->elementsSettings()).show();
   }
   private static final String TICKER_SEPARATOR="     ●     ";
   private final Runnable tickerFrame=new Runnable(){@Override public void run(){
@@ -561,6 +561,14 @@ public class MainActivity extends Activity {
         &&!screenNews.isEmpty()){
       showScreenNews();
     }else playCurrent();
+  }
+  // Open the exact article currently displayed between videos.
+  private String activeScreenNewsUrl=null;
+  private void openDisplayedNews(){
+    String articleUrl=activeScreenNewsUrl;
+    showSite();
+    if(siteOpen&&articleUrl!=null&&articleUrl.startsWith("https://malinapk.net/"))
+      web.loadUrl(articleUrl);
   }
   private void showSite(){
     if(siteOpen||birthdayShowing)return;
@@ -1075,15 +1083,14 @@ public class MainActivity extends Activity {
 
   private void settings(){
     String[] sections={"Файли","Відображення елементів","Розклад та час",
-      "Звуки та відео","Швидкість бігучої стрічки","Оновлення додатка"};
+      "Звуки та відео","Оновлення додатка"};
     new AlertDialog.Builder(this).setTitle("Налаштування MalinForest")
       .setItems(sections,(d,w)->{
         if(w==0)filesSettings();
         if(w==1)elementsSettings();
         if(w==2)scheduleSettings();
         if(w==3)mediaSettings();
-        if(w==4)tickerSpeedSettings();
-        if(w==5)updateSettings();
+        if(w==4)updateSettings();
       }).show();
   }
   private void filesSettings(){
@@ -1099,11 +1106,11 @@ public class MainActivity extends Activity {
   }
   private void elementsSettings(){
     String[] names={"Кнопка інтерактивних ігор","Налаштування карти","Іменинники",
-      "Свята","Онлайн-новини","Факти з Excel","Сезонні ефекти","Новини між відео"};
-    String[] keys={"games",null,"birthdays","holidays","news","facts",null,null};
+      "Свята","Онлайн-новини","Факти з Excel","Сезонні ефекти","Новини між відео","Швидкість стрічки"};
+    String[] keys={"games",null,"birthdays","holidays","news","facts",null,null,null};
     String[] opts=new String[names.length];
     for(int i=0;i<names.length;i++){
-      if(i==1||i==6||i==7){opts[i]=names[i]+"  ›";continue;}
+      if(i==1||i==6||i==7||i==8){opts[i]=names[i]+"  ›";continue;}
       opts[i]=(enabled(keys[i])?"☑  ":"☐  ")+names[i];
     }
     new AlertDialog.Builder(this).setTitle("Відображення елементів")
@@ -1111,6 +1118,7 @@ public class MainActivity extends Activity {
         if(w==1){alertSettings();return;}
         if(w==6){seasonSettings();return;}
         if(w==7){screenNewsSettings();return;}
+        if(w==8){tickerSpeedSettings();return;}
         getPreferences(0).edit().putBoolean(keys[w],!enabled(keys[w])).apply();
         updateVisibility();elementsSettings();
       }).setNegativeButton("Назад",(d,w)->settings()).show();
@@ -1554,12 +1562,13 @@ public class MainActivity extends Activity {
     displayedNewsIds.add(selected.id);
     completedVideosSinceNews=0;
     screenNewsShowing=true;
+    activeScreenNewsUrl=selected.id;
     applyAlertAppearance();
     video.pause();
     screenNewsPanel.removeAllViews();
     screenNewsPanel.setVisibility(View.VISIBLE);
     screenNewsPanel.bringToFront();
-    screenNewsPanel.setOnClickListener(v->showSite());
+    screenNewsPanel.setOnClickListener(v->openDisplayedNews());
     updateSeasonVisibility();
     if(gamesButton!=null){
       gamesButton.setVisibility(enabled("games")&&getPreferences(0).getBoolean("screen_news_games_button",false)?View.VISIBLE:View.GONE);
@@ -1569,6 +1578,7 @@ public class MainActivity extends Activity {
 
     LinearLayout outer=new LinearLayout(this);
     outer.setOrientation(LinearLayout.VERTICAL);
+    outer.setOnClickListener(v->openDisplayedNews());
     outer.setPadding(dp(35),dp(105),dp(35),dp(65));
     Uri bgUri=newsBackgroundUri();
     if(bgUri!=null)try(InputStream in=getContentResolver().openInputStream(bgUri)){
@@ -1603,14 +1613,14 @@ public class MainActivity extends Activity {
     screenNewsText.getSettings().setDefaultTextEncodingName("UTF-8");
     screenNewsText.setVerticalScrollBarEnabled(false);
     screenNewsText.setOnTouchListener((v,e)->{
-      if(e.getAction()==MotionEvent.ACTION_UP){showSite();return true;}
+      if(e.getAction()==MotionEvent.ACTION_UP){openDisplayedNews();return true;}
       return true;
     });
     body.addView(screenNewsText,new LinearLayout.LayoutParams(0,-1,1.05f));
     screenNewsText.post(()->updateNewsTextFlow());
     FrameLayout photoHolder=new FrameLayout(this);
     photoHolder.setBackgroundColor(0x55244936);
-    photoHolder.setOnClickListener(v->showSite());
+    photoHolder.setOnClickListener(v->openDisplayedNews());
     body.addView(photoHolder,new LinearLayout.LayoutParams(0,-1,1f));
     ImageView photo=new ImageView(this);
     photo.setScaleType(ImageView.ScaleType.FIT_CENTER);
