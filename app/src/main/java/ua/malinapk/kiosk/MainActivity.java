@@ -1364,7 +1364,7 @@ public class MainActivity extends Activity {
         if(bitmap!=null)runOnUiThread(()->{
           if(screenNewsShowing&&photo==activeNewsPhotoView
               &&activeNewsPhotoIndex<activeNewsPhotos.size()
-              &&url.equals(activeNewsPhotos.get(activeNewsPhotoIndex)))){
+              &&url.equals(activeNewsPhotos.get(activeNewsPhotoIndex))){
             photo.setImageBitmap(bitmap);
           }
         });
