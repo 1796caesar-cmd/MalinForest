@@ -344,12 +344,28 @@ public class MainActivity extends Activity {
   private int tickerNextPosition=0;
   private float tickerX=0f;
   private long tickerLastFrame=0L;
+  private int tickerSpeedDp(){return new int[]{40,60,85,115,150}[Math.max(0,Math.min(4,getPreferences(0).getInt("ticker_speed",2)))];}
+  private void tickerSpeedSettings(){
+    android.content.SharedPreferences prefs=getPreferences(0);
+    String[] names={"Дуже повільно","Повільно","Середня","Швидко","Дуже швидко"};
+    LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(dp(22),dp(14),dp(22),dp(8));
+    TextView value=new TextView(this);value.setTextSize(18);value.setGravity(Gravity.CENTER);box.addView(value);
+    SeekBar slider=new SeekBar(this);slider.setMax(4);slider.setProgress(Math.max(0,Math.min(4,prefs.getInt("ticker_speed",2))));box.addView(slider);
+    value.setText(names[slider.getProgress()]);
+    slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+      public void onProgressChanged(SeekBar b,int v,boolean user){value.setText(names[v]);if(user)prefs.edit().putInt("ticker_speed",v).apply();}
+      public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}
+    });
+    new AlertDialog.Builder(this).setTitle("Швидкість бігучої стрічки").setView(box)
+      .setPositiveButton("Зберегти",(d,w)->prefs.edit().putInt("ticker_speed",slider.getProgress()).apply())
+      .setNegativeButton("Скасувати",null).show();
+  }
   private static final String TICKER_SEPARATOR="     ●     ";
   private final Runnable tickerFrame=new Runnable(){@Override public void run(){
     if(!tickerRunning||tickerText==null||tickerViewport==null)return;
     long now=android.os.SystemClock.uptimeMillis();
-    float elapsed=Math.min(0.1f,Math.max(0f,(now-tickerLastFrame)/1000f));tickerLastFrame=now;
-    tickerX-=dp(85)*elapsed;
+    float elapsed=Math.min(0.05f,Math.max(0f,(now-tickerLastFrame)/1000f));tickerLastFrame=now;
+    tickerX-=dp(tickerSpeedDp())*elapsed;
     if(!tickerParts.isEmpty()){
       String first=tickerParts.get(0)+TICKER_SEPARATOR;
       float firstWidth=tickerText.getPaint().measureText(first);
@@ -369,7 +385,7 @@ public class MainActivity extends Activity {
       }
     }
     tickerText.setTranslationX(tickerX);
-    handler.postDelayed(this,16);
+    tickerViewport.postOnAnimation(this);
   }};
   private void addTickerPart(){
     if(tickerItems.isEmpty())return;
@@ -407,7 +423,7 @@ public class MainActivity extends Activity {
     newsBadge.setText(category.toUpperCase(new Locale("uk","UA")));
     updateTickerStrip();tickerX=tickerViewport.getWidth();tickerText.setTranslationX(tickerX);
     tickerLastFrame=android.os.SystemClock.uptimeMillis();tickerRunning=true;
-    handler.post(tickerFrame);
+    tickerViewport.postOnAnimation(tickerFrame);
   }
   // Для кожної категорії окрема випадкова перестановка без повторень.
   // Порядок та позиція зберігаються після закриття додатка.
@@ -815,7 +831,7 @@ public class MainActivity extends Activity {
   }
   private void applyAlertAppearance(){
     if(alertTile==null)return;
-    boolean show=getPreferences(0).getBoolean("alert_visible",true);
+    boolean show=getPreferences(0).getBoolean("alert_visible",true) && (!screenNewsShowing||getPreferences(0).getBoolean("alert_in_news",true));
     alertTile.setVisibility(show&&!silenceActive&&!siteOpen&&!birthdayShowing&&gameOverlay==null?View.VISIBLE:View.GONE);
     String style=getPreferences(0).getString("alert_style","tile");
     int opacity=getPreferences(0).getInt("alert_opacity",50);
@@ -830,6 +846,7 @@ public class MainActivity extends Activity {
     android.content.SharedPreferences prefs=getPreferences(0);
     LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(dp(22),dp(12),dp(22),dp(12));
     CheckBox visible=new CheckBox(this);visible.setText("Показувати карту");visible.setChecked(prefs.getBoolean("alert_visible",true));box.addView(visible);
+    CheckBox inNews=new CheckBox(this);inNews.setText("Відображати у новині");inNews.setChecked(prefs.getBoolean("alert_in_news",true));box.addView(inNews);
     TextView sourceTitle=new TextView(this);sourceTitle.setText("Джерело карти");sourceTitle.setTextSize(16);
     sourceTitle.setPadding(0,dp(14),0,0);box.addView(sourceTitle);
     Spinner sources=new Spinner(this);
@@ -851,7 +868,7 @@ public class MainActivity extends Activity {
     TextView hint=new TextView(this);hint.setText("Утримуйте карту 2 секунди для переміщення та зміни розміру. Сайт може не підтримувати вбудовування в WebView.");box.addView(hint);
     ScrollView scroll=new ScrollView(this);scroll.addView(box);
     new AlertDialog.Builder(this).setTitle("Налаштування карти").setView(scroll)
-      .setPositiveButton("Зберегти",(d,w)->{prefs.edit().putBoolean("alert_visible",visible.isChecked())
+      .setPositiveButton("Зберегти",(d,w)->{prefs.edit().putBoolean("alert_visible",visible.isChecked()).putBoolean("alert_in_news",inNews.isChecked())
         .putInt("alert_source",sources.getSelectedItemPosition()).putInt("alert_interval",values[intervals.getSelectedItemPosition()])
         .putString("alert_style",keys[styles.getSelectedItemPosition()]).putInt("alert_opacity",op.getProgress()+10).apply();loadAlertSource();applyAlertAppearance();})
       .setNegativeButton("Скасувати",null).show();
@@ -901,7 +918,7 @@ public class MainActivity extends Activity {
           if(assets!=null)for(int i=0;i<assets.length();i++){
             JSONObject asset=assets.getJSONObject(i);
             String name=asset.optString("name","");
-            if(name.equals("MalinForest-v"+version+".apk")){
+            if(name.equals("MalinForest-"+version+".apk")||name.equals("MalinForest-"+version+".apk")){
               url=asset.optString("browser_download_url","");break;
             }
           }
@@ -1004,7 +1021,7 @@ public class MainActivity extends Activity {
       request.setDescription("Оновлення MalinForest");
       request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
       request.setMimeType("application/vnd.android.package-archive");
-      request.setDestinationInExternalFilesDir(this,Environment.DIRECTORY_DOWNLOADS,"MalinForest-v"+version+".apk");
+      request.setDestinationInExternalFilesDir(this,Environment.DIRECTORY_DOWNLOADS,"MalinForest-"+version+".apk");
       updateDownloadId=updateManager.enqueue(request);
       downloadedUpdateUri=null;
       LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);
@@ -1058,14 +1075,15 @@ public class MainActivity extends Activity {
 
   private void settings(){
     String[] sections={"Файли","Відображення елементів","Розклад та час",
-      "Звуки та відео","Оновлення додатка"};
+      "Звуки та відео","Швидкість бігучої стрічки","Оновлення додатка"};
     new AlertDialog.Builder(this).setTitle("Налаштування MalinForest")
       .setItems(sections,(d,w)->{
         if(w==0)filesSettings();
         if(w==1)elementsSettings();
         if(w==2)scheduleSettings();
         if(w==3)mediaSettings();
-        if(w==4)updateSettings();
+        if(w==4)tickerSpeedSettings();
+        if(w==5)updateSettings();
       }).show();
   }
   private void filesSettings(){
@@ -1228,7 +1246,7 @@ public class MainActivity extends Activity {
     String best="";int bestScore=-1;
     while(m.find()){
       String attrs=m.group(2).toLowerCase(java.util.Locale.ROOT);
-      boolean candidate=attrs.matches("(?s).*(?:articlebody|article-body|article-content|entry-content|news-content|itemfulltext|fulltext|field-name-body|post-content|item-page|article-text|news-text|com-content-article|itemprop).*");
+      boolean candidate=attrs.matches("(?s).*(?:articlebody|article-body|article-content|entry-content|news-content|news-single-item|news-detail|news-text-wrap|news-body|news-single|itemfulltext|fulltext|field-name-body|post-content|item-page|article-text|news-text|com-content-article|itemprop).*");
       if(!candidate&&!"article".equalsIgnoreCase(m.group(1)))continue;
       int pos=m.end(),depth=1;
       Pattern tag=Pattern.compile("(?is)</?(?:article|div|section)\\b[^>]*>");
@@ -1240,13 +1258,40 @@ public class MainActivity extends Activity {
       String chunk=cleaned.substring(pos,nested.start());
       String text=articlePlain(chunk);
       int score=text.length();
-      if(attrs.contains("comment")||attrs.contains("related")||attrs.contains("sidebar"))score=0;
+      if(attrs.contains("comment")||attrs.contains("related")||attrs.contains("sidebar")||attrs.contains("teaser")||attrs.contains("preview"))score=0;
+      // Prefer the site's news article body, rather than a short listing excerpt.
+      if(attrs.contains("news-single-item")||attrs.contains("news-text-wrap")||attrs.contains("article-body")||attrs.contains("article-content"))score+=10000;
       if(score>bestScore){best=chunk;bestScore=score;}
     }
     if(bestScore>=80)return best;
     Matcher body=Pattern.compile("(?is)<main\\b[^>]*>(.*?)</main>").matcher(cleaned);
     if(body.find())return body.group(1);
     return best;
+  }
+
+  private String articleFromStructuredData(String html){
+    Matcher scripts=Pattern.compile("(?is)<script\\b[^>]*type\\s*=\\s*['\"]application/ld\\+json['\"][^>]*>(.*?)</script>").matcher(html);
+    while(scripts.find())try{
+      String raw=scripts.group(1).trim();
+      Object root=raw.startsWith("[")?new JSONArray(raw):new JSONObject(raw);
+      String body=findArticleBody(root);
+      if(body.length()>160)return articlePlain(body);
+    }catch(Exception ignored){}
+    return "";
+  }
+  private String findArticleBody(Object node){
+    if(node instanceof JSONObject){
+      JSONObject o=(JSONObject)node;
+      String body=o.optString("articleBody","");if(body.length()>160)return body;
+      java.util.Iterator<String> keys=o.keys();while(keys.hasNext()){
+        String found=findArticleBody(o.opt(keys.next()));if(found.length()>160)return found;
+      }
+    }else if(node instanceof JSONArray){
+      JSONArray a=(JSONArray)node;for(int i=0;i<a.length();i++){
+        String found=findArticleBody(a.opt(i));if(found.length()>160)return found;
+      }
+    }
+    return "";
   }
 
   private String articlePlain(String html){
@@ -1440,7 +1485,7 @@ public class MainActivity extends Activity {
     String html="<!doctype html><html lang='uk'><head><meta name='viewport' content='width=device-width,initial-scale=1,user-scalable=no'>"
       +"<style>html,body{margin:0;padding:0;overflow:hidden;background:transparent;color:#f4f8f3;font-family:sans-serif;}"
       +"body{padding:8px 16px 12px 8px;box-sizing:border-box;}h1{font-size:27px;line-height:1.22;margin:0 0 18px;font-weight:700;}"
-      +"p{font-size:19px;line-height:1.42;margin:0;white-space:normal;}div{box-sizing:border-box;}</style></head><body>"
+      +"p{font-size:18px;line-height:1.32;margin:0;white-space:normal;}div{box-sizing:border-box;}</style></head><body>"
       +floatHtml+"<h1>"+title+"</h1><p>"+body+"</p></body></html>";
     screenNewsText.loadDataWithBaseURL("https://malinapk.net/",html,"text/html","UTF-8",null);
   }
@@ -1451,13 +1496,22 @@ public class MainActivity extends Activity {
       try{
         String html=fetch(item.id);
         String article=articleContentHtml(html);
-        String content=articlePlain(article);
+        String content=articleFromStructuredData(html);
+        if(content.length()<160)content=articlePlain(article);
+        // A short RSS teaser must never replace a longer article body.
+        if(content.length()<160){
+          Matcher main=Pattern.compile("(?is)<main\\b[^>]*>(.*?)</main>").matcher(html);
+          if(main.find()){
+            String mainText=articlePlain(main.group(1));
+            if(mainText.length()>content.length())content=mainText;
+          }
+        }
         ArrayList<String> photos=articlePhotos(article,html,item.id,item.image);
         final String full=content;
         runOnUiThread(()->{
           if(!screenNewsShowing||screenNewsText==null||!item.title.equals(screenNewsTitle))return;
           if(!full.isEmpty()){
-            screenNewsBody=full.length()>12000?full.substring(0,12000):full;
+            screenNewsBody=full;
             updateNewsTextFlow();
           }
           if(!photos.isEmpty()&&activeNewsPhotoView!=null){
@@ -1480,6 +1534,7 @@ public class MainActivity extends Activity {
     displayedNewsIds.add(selected.id);
     completedVideosSinceNews=0;
     screenNewsShowing=true;
+    applyAlertAppearance();
     video.pause();
     screenNewsPanel.removeAllViews();
     screenNewsPanel.setVisibility(View.VISIBLE);
@@ -1550,6 +1605,7 @@ public class MainActivity extends Activity {
   private void finishScreenNews(){
     if(!screenNewsShowing)return;
     screenNewsShowing=false;
+    applyAlertAppearance();
     handler.removeCallbacks(closeScreenNews);
     handler.removeCallbacks(nextNewsPhoto);
     activeNewsPhotos.clear();activeNewsPhotoView=null;
