@@ -94,6 +94,18 @@ public class MainActivity extends Activity {
   private final ArrayList<String> activeNewsPhotos=new ArrayList<>();
   private int activeNewsPhotoIndex=0;
   private ImageView activeNewsPhotoView;
+  // Small in-memory image cache. Never stores full articles or images on disk.
+  private final android.util.LruCache<String,android.graphics.Bitmap> newsImageMemory =
+    new android.util.LruCache<String,android.graphics.Bitmap>(12*1024){
+      @Override protected int sizeOf(String key,android.graphics.Bitmap value){
+        return Math.max(1,value.getByteCount()/1024);
+      }
+    };
+  private final java.util.Set<String> newsImagesLoading =
+    java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
+  private final java.util.concurrent.ExecutorService newsImageWorkers =
+    java.util.concurrent.Executors.newFixedThreadPool(2);
+
   private final Runnable nextNewsPhoto=new Runnable(){@Override public void run(){
     if(!screenNewsShowing||activeNewsPhotoView==null||activeNewsPhotos.size()<2)return;
     activeNewsPhotoIndex=(activeNewsPhotoIndex+1)%activeNewsPhotos.size();
@@ -1338,24 +1350,70 @@ public class MainActivity extends Activity {
     return new ArrayList<>(found);
   }
 
-  private void displayNewsPhoto(ImageView photo,String url){
+  private android.graphics.Bitmap fetchNewsBitmap(String url){
+    HttpURLConnection c=null;
+    try{
+      c=(HttpURLConnection)new URL(url).openConnection();
+      c.setConnectTimeout(10000);c.setReadTimeout(12000);c.setInstanceFollowRedirects(true);
+      c.setRequestProperty("User-Agent","Mozilla/5.0 (Android; MalinForest Kiosk)");
+      c.setRequestProperty("Referer","https://malinapk.net/");
+      try(InputStream in=c.getInputStream()){
+        // Downsample large images before caching to avoid memory pressure.
+        android.graphics.BitmapFactory.Options opts=new android.graphics.BitmapFactory.Options();
+        opts.inPreferredConfig=android.graphics.Bitmap.Config.RGB_565;
+        return android.graphics.BitmapFactory.decodeStream(in,null,opts);
+      }
+    }catch(Exception ignored){return null;}
+    finally{if(c!=null)c.disconnect();}
+  }
+
+  private void requestNewsBitmap(String url){
     if(url==null||!url.startsWith("https://"))return;
-    new Thread(()->{
-      HttpURLConnection c=null;
+    synchronized(newsImageMemory){if(newsImageMemory.get(url)!=null)return;}
+    if(!newsImagesLoading.add(url))return;
+    newsImageWorkers.execute(()->{
       try{
-        c=(HttpURLConnection)new URL(url).openConnection();
-        c.setConnectTimeout(10000);c.setReadTimeout(12000);c.setInstanceFollowRedirects(true);
-        c.setRequestProperty("User-Agent","Mozilla/5.0 (Android; MalinForest Kiosk)");
-        c.setRequestProperty("Referer","https://malinapk.net/");
-        try(InputStream in=c.getInputStream()){
-          android.graphics.Bitmap bmp=android.graphics.BitmapFactory.decodeStream(in);
-          if(bmp!=null)runOnUiThread(()->{
-            if(screenNewsShowing&&photo==activeNewsPhotoView&&url.equals(activeNewsPhotos.get(activeNewsPhotoIndex)))
-              photo.setImageBitmap(bmp);
+        android.graphics.Bitmap bmp=fetchNewsBitmap(url);
+        if(bmp!=null){
+          synchronized(newsImageMemory){newsImageMemory.put(url,bmp);}
+          runOnUiThread(()->{
+            if(screenNewsShowing&&activeNewsPhotoView!=null
+                &&activeNewsPhotoIndex<activeNewsPhotos.size()
+                &&url.equals(activeNewsPhotos.get(activeNewsPhotoIndex)))
+              activeNewsPhotoView.setImageBitmap(bmp);
           });
         }
-      }catch(Exception ignored){}finally{if(c!=null)c.disconnect();}
-    }).start();
+      }finally{newsImagesLoading.remove(url);}
+    });
+  }
+
+  private void displayNewsPhoto(ImageView photo,String url){
+    if(url==null||!url.startsWith("https://"))return;
+    android.graphics.Bitmap ready;
+    synchronized(newsImageMemory){ready=newsImageMemory.get(url);}
+    if(ready!=null){photo.setImageBitmap(ready);return;}
+    requestNewsBitmap(url);
+  }
+
+  private void prefetchUpcomingNewsPhotos(){
+    int count=0;
+    for(ScreenNews news:screenNews){
+      if(displayedNewsIds.contains(news.id))continue;
+      if(count++>=3)break;
+      final String known=absoluteArticleImage(news.image,news.id);
+      if(!known.isEmpty())requestNewsBitmap(known);
+      else if(news.id!=null&&news.id.startsWith("https://malinapk.net/")){
+        // RSS often has no enclosure: discover the cover while video plays.
+        final String articleUrl=news.id;
+        newsImageWorkers.execute(()->{
+          try{
+            String page=fetch(articleUrl);
+            String cover=absoluteArticleImage(extractMeta(page,"og:image"),articleUrl);
+            if(!cover.isEmpty())requestNewsBitmap(cover);
+          }catch(Exception ignored){}
+        });
+      }
+    }
   }
 
   private void loadNewsPhoto(ImageView photo,ScreenNews news){
@@ -1458,6 +1516,7 @@ public class MainActivity extends Activity {
           HashSet<String> current=new HashSet<>();
           for(ScreenNews n:fresh)current.add(n.id);
           displayedNewsIds.retainAll(current);
+          prefetchUpcomingNewsPhotos();
         }
         getPreferences(0).edit().putString("screen_news_status",
           fresh.isEmpty()?"Новин не завантажено. "+finalError:"Завантажено новин: "+fresh.size()).apply();
@@ -1560,6 +1619,7 @@ public class MainActivity extends Activity {
     for(ScreenNews item:screenNews)if(!displayedNewsIds.contains(item.id)){selected=item;break;}
     if(selected==null){displayedNewsIds.clear();selected=screenNews.get(0);}
     displayedNewsIds.add(selected.id);
+    prefetchUpcomingNewsPhotos();
     completedVideosSinceNews=0;
     screenNewsShowing=true;
     activeScreenNewsUrl=selected.id;
