@@ -533,7 +533,7 @@ public class MainActivity extends Activity {
   }
   private void showSite(){
     if(siteOpen||birthdayShowing)return;
-    if(screenNewsShowing)finishScreenNews();
+    if(screenNewsShowing){screenNewsShowing=false;handler.removeCallbacks(closeScreenNews);screenNewsPanel.setVisibility(View.GONE);screenNewsPanel.removeAllViews();}
     siteOpen=true;lastPosition=video.getCurrentPosition();
     if(video.isPlaying())video.pause();videoLayer.setVisibility(View.GONE);
     updateSeasonVisibility();
@@ -1119,6 +1119,76 @@ public class MainActivity extends Activity {
       }).setNegativeButton("Назад",(d,w)->elementsSettings()).show();
   }
 
+  private String formatNewsDate(String raw){
+    if(raw==null||raw.trim().isEmpty())return "";
+    String[] patterns={"EEE, dd MMM yyyy HH:mm:ss Z", "EEE, dd MMM yyyy HH:mm Z", "dd MMM yyyy HH:mm:ss Z", "yyyy-MM-dd'T'HH:mm:ssXXX", "yyyy-MM-dd HH:mm:ss"};
+    for(String pattern:patterns)try{
+      java.text.SimpleDateFormat input=new java.text.SimpleDateFormat(pattern,java.util.Locale.ENGLISH);
+      input.setLenient(false);
+      java.util.Date parsed=input.parse(raw.trim());
+      if(parsed!=null){
+        java.text.SimpleDateFormat output=new java.text.SimpleDateFormat("d MMMM yyyy 'року'",new java.util.Locale("uk","UA"));
+        output.setTimeZone(java.util.TimeZone.getTimeZone("Europe/Kyiv"));
+        return output.format(parsed);
+      }
+    }catch(Exception ignored){}
+    return raw;
+  }
+
+  private Uri newsBackgroundUri(){
+    if(dataFolder==null)return null;
+    try{
+      Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(dataFolder,DocumentsContract.getTreeDocumentId(dataFolder));
+      try(Cursor c=getContentResolver().query(children,new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME,DocumentsContract.Document.COLUMN_MIME_TYPE},null,null,null)){
+        if(c!=null)while(c.moveToNext())if("News".equalsIgnoreCase(c.getString(1))&&DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2))){
+          Uri folderUri=DocumentsContract.buildDocumentUriUsingTree(dataFolder,c.getString(0));
+          Uri files=DocumentsContract.buildChildDocumentsUriUsingTree(dataFolder,c.getString(0));
+          try(Cursor pics=getContentResolver().query(files,new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null)){
+            if(pics!=null)while(pics.moveToNext())if("background.jpg".equalsIgnoreCase(pics.getString(1))||"background.png".equalsIgnoreCase(pics.getString(1)))
+              return DocumentsContract.buildDocumentUriUsingTree(dataFolder,pics.getString(0));
+          }
+        }
+      }
+    }catch(Exception ignored){}
+    return null;
+  }
+
+  private String articleImage(String link){
+    try{
+      if(link==null||!link.startsWith("https://malinapk.net/"))return "";
+      String html=fetch(link);
+      String image=extractMeta(html,"og:image");
+      if(image.isEmpty())image=extractMeta(html,"twitter:image");
+      if(image.isEmpty()){
+        java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?is)<img\\b[^>]*(?:src|data-src)\\s*=\\s*['\"]([^'\"]+\\.(?:jpg|jpeg|png|webp)(?:\\?[^'\"]*)?)['\"]").matcher(html);
+        if(m.find())image=m.group(1);
+      }
+      if(image.startsWith("//"))image="https:"+image;
+      else if(image.startsWith("/"))image="https://malinapk.net"+image;
+      else if(!image.startsWith("https://")&&!image.startsWith("http://"))image="https://malinapk.net/"+image;
+      return image;
+    }catch(Exception ignored){return "";}
+  }
+
+  private void loadNewsPhoto(ImageView photo,ScreenNews news){
+    new Thread(()->{
+      String url=news.image;
+      if(url==null||url.isEmpty())url=articleImage(news.id);
+      if(url==null||!url.startsWith("https://"))return;
+      HttpURLConnection c=null;
+      try{
+        c=(HttpURLConnection)new URL(url).openConnection();
+        c.setConnectTimeout(10000);c.setReadTimeout(10000);c.setInstanceFollowRedirects(true);
+        c.setRequestProperty("User-Agent","Mozilla/5.0 (Android; MalinForest Kiosk)");
+        c.setRequestProperty("Referer","https://malinapk.net/");
+        try(InputStream in=c.getInputStream()){
+          android.graphics.Bitmap bmp=android.graphics.BitmapFactory.decodeStream(in);
+          if(bmp!=null)runOnUiThread(()->{if(screenNewsShowing&&photo.getParent()!=null)photo.setImageBitmap(bmp);});
+        }
+      }catch(Exception ignored){}finally{if(c!=null)c.disconnect();}
+    }).start();
+  }
+
   private void setupScreenNewsPanel(){
     screenNewsPanel=new FrameLayout(this);
     screenNewsPanel.setBackgroundColor(0xFF10261B);
@@ -1227,15 +1297,29 @@ public class MainActivity extends Activity {
     screenNewsPanel.removeAllViews();
     screenNewsPanel.setVisibility(View.VISIBLE);
     screenNewsPanel.bringToFront();
+    screenNewsPanel.setOnClickListener(v->showSite());
     updateSeasonVisibility();
-    if(prompt!=null)prompt.setVisibility(View.GONE);
+    if(gamesButton!=null)gamesButton.setVisibility(View.GONE);
+    if(prompt!=null){prompt.setVisibility(View.VISIBLE);prompt.bringToFront();}
 
     LinearLayout outer=new LinearLayout(this);
     outer.setOrientation(LinearLayout.VERTICAL);
     outer.setPadding(dp(35),dp(105),dp(35),dp(65));
+    Uri bgUri=newsBackgroundUri();
+    if(bgUri!=null)try(InputStream in=getContentResolver().openInputStream(bgUri)){
+      android.graphics.Bitmap bmp=android.graphics.BitmapFactory.decodeStream(in);
+      if(bmp!=null){
+        ImageView background=new ImageView(this);
+        background.setImageBitmap(bmp);
+        background.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        screenNewsPanel.addView(background,new FrameLayout.LayoutParams(-1,-1));
+      }
+    }catch(Exception ignored){}
+    View shade=new View(this);shade.setBackgroundColor(0xB510261B);
+    screenNewsPanel.addView(shade,new FrameLayout.LayoutParams(-1,-1));
     screenNewsPanel.addView(outer,new FrameLayout.LayoutParams(-1,-1));
 
-    TextView ribbon=label("  ЛІСОВІ НОВИНИ  •  "+selected.source+"  •  "+selected.date+"  ",15,true);
+    TextView ribbon=label("  ЛІСОВІ НОВИНИ  •  "+selected.source+"  •  "+formatNewsDate(selected.date)+"  ",15,true);
     ribbon.setTextColor(0xFFFFD992);ribbon.setBackgroundColor(0xFF244936);
     ribbon.setPadding(dp(12),dp(10),dp(12),dp(10));
     outer.addView(ribbon,new LinearLayout.LayoutParams(-1,-2));
@@ -1260,24 +1344,15 @@ public class MainActivity extends Activity {
     left.addView(summary,sp);
 
     FrameLayout photoHolder=new FrameLayout(this);
-    photoHolder.setBackgroundColor(0xFF244936);
+    photoHolder.setBackgroundColor(0x55244936);
+    photoHolder.setOnClickListener(v->showSite());
     body.addView(photoHolder,new LinearLayout.LayoutParams(0,-1,1f));
     ImageView photo=new ImageView(this);
     photo.setScaleType(ImageView.ScaleType.CENTER_CROP);
     photoHolder.addView(photo,new FrameLayout.LayoutParams(-1,-1));
-    if(selected.image!=null&&selected.image.startsWith("https://")){
-      String url=selected.image;
-      new Thread(()->{
-        try{
-          HttpURLConnection connection=(HttpURLConnection)new URL(url).openConnection();
-          connection.setConnectTimeout(7000);connection.setReadTimeout(7000);
-          try(InputStream stream=connection.getInputStream()){
-            final android.graphics.Bitmap bmp=android.graphics.BitmapFactory.decodeStream(stream);
-            if(bmp!=null)runOnUiThread(()->{if(screenNewsShowing)photo.setImageBitmap(bmp);});
-          }finally{connection.disconnect();}
-        }catch(Exception ignored){}
-      }).start();
-    }
+    loadNewsPhoto(photo,selected);
+    // Keep the animated touch prompt above the news card.
+    if(prompt!=null)prompt.bringToFront();
     screenNewsPanel.setAlpha(0f);
     screenNewsPanel.animate().alpha(1f).setDuration(450).start();
     int seconds=Math.max(15,Math.min(300,getPreferences(0).getInt("screen_news_seconds",60)));
@@ -1291,6 +1366,7 @@ public class MainActivity extends Activity {
     screenNewsPanel.setVisibility(View.GONE);
     screenNewsPanel.removeAllViews();
     if(prompt!=null)prompt.setVisibility(View.VISIBLE);
+    if(gamesButton!=null)gamesButton.setVisibility(enabled("games")?View.VISIBLE:View.GONE);
     updateSeasonVisibility();
     if(!siteOpen&&!birthdayShowing&&!silenceActive&&gameOverlay==null)playCurrent();
   }
