@@ -1339,37 +1339,24 @@ public class MainActivity extends Activity {
     return new ArrayList<>(found);
   }
 
-  // Persistent on-disk image cache: survives restarts and avoids repeated downloads.
-  // Online-only images: no disk cache and no blocking news prefetch.
   private void displayNewsPhoto(ImageView photo,String url){
     if(url==null||!url.startsWith("https://"))return;
     new Thread(()->{
-      HttpURLConnection connection=null;
+      HttpURLConnection c=null;
       try{
-        connection=(HttpURLConnection)new URL(url).openConnection();
-        connection.setConnectTimeout(10000);
-        connection.setReadTimeout(15000);
-        connection.setInstanceFollowRedirects(true);
-        connection.setUseCaches(false);
-        connection.setRequestProperty("Cache-Control","no-cache");
-        connection.setRequestProperty("User-Agent","Mozilla/5.0 (Android; MalinForest Kiosk)");
-        connection.setRequestProperty("Referer","https://malinapk.net/");
-        if(connection.getResponseCode()!=HttpURLConnection.HTTP_OK)return;
-        android.graphics.Bitmap bitmap;
-        try(InputStream stream=connection.getInputStream()){
-          android.graphics.BitmapFactory.Options options=new android.graphics.BitmapFactory.Options();
-          options.inSampleSize=2;
-          bitmap=android.graphics.BitmapFactory.decodeStream(stream,null,options);
+        c=(HttpURLConnection)new URL(url).openConnection();
+        c.setConnectTimeout(10000);c.setReadTimeout(12000);c.setInstanceFollowRedirects(true);
+        c.setRequestProperty("User-Agent","Mozilla/5.0 (Android; MalinForest Kiosk)");
+        c.setRequestProperty("Referer","https://malinapk.net/");
+        try(InputStream in=c.getInputStream()){
+          android.graphics.Bitmap bmp=android.graphics.BitmapFactory.decodeStream(in);
+          if(bmp!=null)runOnUiThread(()->{
+            if(screenNewsShowing&&photo==activeNewsPhotoView&&activeNewsPhotoIndex<activeNewsPhotos.size()&&url.equals(activeNewsPhotos.get(activeNewsPhotoIndex)))
+              photo.setImageBitmap(bmp);
+          });
         }
-        if(bitmap!=null)runOnUiThread(()->{
-          if(screenNewsShowing&&photo==activeNewsPhotoView
-              &&activeNewsPhotoIndex<activeNewsPhotos.size()
-              &&url.equals(activeNewsPhotos.get(activeNewsPhotoIndex))){
-            photo.setImageBitmap(bitmap);
-          }
-        });
-      }catch(Exception ignored){}finally{if(connection!=null)connection.disconnect();}
-    },"news-photo-online").start();
+      }catch(Exception ignored){}finally{if(c!=null)c.disconnect();}
+    }).start();
   }
 
   private void loadNewsPhoto(ImageView photo,ScreenNews news){
@@ -1555,12 +1542,9 @@ public class MainActivity extends Activity {
           }
           if(!photos.isEmpty()&&activeNewsPhotoView!=null){
             handler.removeCallbacks(nextNewsPhoto);
-            // One cover per article, never rotate through other images.
-            if(activeNewsPhotos.isEmpty()){
-              activeNewsPhotos.add(photos.get(0));
-              activeNewsPhotoIndex=0;
-              displayNewsPhoto(activeNewsPhotoView,activeNewsPhotos.get(0));
-            }
+            activeNewsPhotos.clear();activeNewsPhotos.add(photos.get(0));
+            activeNewsPhotoIndex=0;
+            displayNewsPhoto(activeNewsPhotoView,activeNewsPhotos.get(0));
           }
         });
       }catch(Exception ignored){}
