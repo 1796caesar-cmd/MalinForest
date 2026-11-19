@@ -38,6 +38,17 @@ jobs:
         run: |
           echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/malinforest-release.jks"
 
+      - name: Generate unique release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(sed -nE "s/.*versionName = System.getenv\('MALINFOREST_VERSION_NAME'\) \?: '([0-9]+\.[0-9]+(\.[0-9]+)*)'.*/\1/p" app/build.gradle | head -n1)"
+          if [[ -z "$base" ]]; then
+            echo "Could not determine versionName from app/build.gradle" >&2
+            exit 1
+          fi
+          echo "MALINFOREST_VERSION_NAME=${base}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
       - name: Build signed Release APK
         env:
           MALINFOREST_KEYSTORE_PATH: ${{ runner.temp }}/malinforest-release.jks
@@ -54,7 +65,7 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
-      - name: Publish or update GitHub Release
+      - name: Publish GitHub Release
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,12 +86,8 @@ jobs:
           fi
           version="${BASH_REMATCH[1]}"
           tag="v${version}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$apk" --clobber
-          else
-            gh release create "$tag" "$apk" \
-              --target "$GITHUB_SHA" \
-              --title "MalinForest $tag" \
-              --notes "Автоматичний реліз MalinForest $tag" \
-              --latest
-          fi
+          gh release create "$tag" "$apk" \
+            --target "$GITHUB_SHA" \
+            --title "MalinForest $tag" \
+            --notes "Автоматичний реліз MalinForest $tag" \
+            --latest
