@@ -566,11 +566,11 @@ public class MainActivity extends Activity {
   private String activeScreenNewsUrl=null;
   private void openDisplayedNews(){
     String articleUrl=activeScreenNewsUrl;
-    showSite();
-    if(siteOpen&&articleUrl!=null&&articleUrl.startsWith("https://malinapk.net/"))
-      web.loadUrl(articleUrl);
+    if(articleUrl!=null&&articleUrl.startsWith("https://malinapk.net/"))showSite(articleUrl);
+    else showSite();
   }
-  private void showSite(){
+  private void showSite(){showSite(null);}
+  private void showSite(String targetUrl){
     if(siteOpen||birthdayShowing)return;
     if(screenNewsShowing){screenNewsShowing=false;handler.removeCallbacks(closeScreenNews);screenNewsPanel.setVisibility(View.GONE);screenNewsPanel.removeAllViews();screenNewsText=null;handler.removeCallbacks(nextNewsPhoto);activeNewsPhotos.clear();activeNewsPhotoView=null;}
     siteOpen=true;lastPosition=video.getCurrentPosition();
@@ -581,7 +581,8 @@ public class MainActivity extends Activity {
     // Верхня панель у режимі сайту непрозора.
     LinearLayout top=topPanel;
     top.setBackgroundColor(0xFF142A20);
-    if(web.getUrl()==null||"about:blank".equals(web.getUrl()))web.loadUrl(SITE);
+    if(targetUrl!=null&&targetUrl.startsWith("https://malinapk.net/"))web.loadUrl(targetUrl);
+    else if(web.getUrl()==null||"about:blank".equals(web.getUrl()))web.loadUrl(SITE);
     lastTouch=System.currentTimeMillis();scheduleIdle();
   }
   private void showVideo(){
@@ -1134,7 +1135,9 @@ public class MainActivity extends Activity {
       "Час одного фото: "+p.getInt("screen_news_photo_seconds",10)+" с",
       (p.getBoolean("screen_news_games_button",false)?"☑":"☐")+" Кнопка ігор під час новини",
       "Оновити новини зараз",
-      "Стан: "+p.getString("screen_news_status","Ще не перевірено")
+      "Стан: "+p.getString("screen_news_status","Ще не перевірено"),
+      "Завантажено фото: "+newsPhotoCacheCount(),
+      "Пам’ять фото: використано "+newsPhotoCacheUsedMb()+" МБ з доступних 200 МБ"
     };
     new AlertDialog.Builder(this).setTitle("Новини між відео")
       .setItems(options,(dialog,which)->{
@@ -1338,24 +1341,109 @@ public class MainActivity extends Activity {
     return new ArrayList<>(found);
   }
 
+  // Persistent on-disk image cache: survives restarts and avoids repeated downloads.
+  private static final long PHOTO_CACHE_LIMIT=200L*1024*1024;
+  private final Object photoCacheLock=new Object();
+  private File photoCacheDir(){
+    File dir=new File(getCacheDir(),"malinforest_news_photos");
+    if(!dir.exists())dir.mkdirs();
+    return dir;
+  }
+  // Read current disk usage, not a saved counter: correct after restarts or cache eviction.
+  private long[] newsPhotoCacheStats(){
+    long count=0,bytes=0;
+    synchronized(photoCacheLock){
+      File[] files=photoCacheDir().listFiles();
+      if(files!=null)for(File f:files){
+        if(f.isFile()&&f.getName().endsWith(".img")&&f.length()>0){count++;bytes+=f.length();}
+      }
+    }
+    return new long[]{count,bytes};
+  }
+  private long newsPhotoCacheCount(){return newsPhotoCacheStats()[0];}
+  private String newsPhotoCacheUsedMb(){
+    double mb=newsPhotoCacheStats()[1]/(1024.0*1024.0);
+    return String.format(java.util.Locale.forLanguageTag("uk-UA"),"%.1f",mb);
+  }
+  private File photoCacheFile(String url){
+    try{
+      byte[] hash=java.security.MessageDigest.getInstance("SHA-256").digest(url.getBytes("UTF-8"));
+      StringBuilder name=new StringBuilder();
+      for(byte b:hash)name.append(String.format(java.util.Locale.US,"%02x",b&255));
+      return new File(photoCacheDir(),name.toString()+".img");
+    }catch(Exception e){return null;}
+  }
+  private void trimPhotoCache(){
+    synchronized(photoCacheLock){
+      File[] files=photoCacheDir().listFiles();if(files==null)return;
+      long size=0;for(File f:files)size+=f.length();
+      if(size<=PHOTO_CACHE_LIMIT)return;
+      Arrays.sort(files,(a,b)->Long.compare(a.lastModified(),b.lastModified()));
+      for(File f:files){if(size<=PHOTO_CACHE_LIMIT)break;long n=f.length();if(f.delete())size-=n;}
+    }
+  }
+  private File cachedPhoto(String url){
+    if(url==null||!url.startsWith("https://"))return null;
+    File target=photoCacheFile(url);if(target==null)return null;
+    if(target.isFile()&&target.length()>0){target.setLastModified(System.currentTimeMillis());return target;}
+    synchronized(photoCacheLock){
+      if(target.isFile()&&target.length()>0)return target;
+      File tmp=null;HttpURLConnection c=null;
+      try{
+        c=(HttpURLConnection)new URL(url).openConnection();
+        c.setConnectTimeout(10000);c.setReadTimeout(15000);c.setInstanceFollowRedirects(true);
+        c.setRequestProperty("User-Agent","Mozilla/5.0 (Android; MalinForest Kiosk)");
+        c.setRequestProperty("Referer","https://malinapk.net/");
+        if(c.getResponseCode()!=200)return null;
+        tmp=File.createTempFile("photo_",".tmp",photoCacheDir());
+        long total=0;
+        try(InputStream in=c.getInputStream();FileOutputStream out=new FileOutputStream(tmp)){
+          byte[] buf=new byte[16384];int n;
+          while((n=in.read(buf))!=-1){total+=n;if(total>16L*1024*1024)throw new IOException("Photo too large");out.write(buf,0,n);}
+        }
+        if(total<100||!tmp.renameTo(target))return null;
+        target.setLastModified(System.currentTimeMillis());
+        return target;
+      }catch(Exception ignored){return null;}
+      finally{if(tmp!=null&&tmp.exists())tmp.delete();if(c!=null)c.disconnect();}
+    }
+  }
+  private android.graphics.Bitmap decodeNewsBitmap(File file){
+    if(file==null)return null;
+    android.graphics.BitmapFactory.Options o=new android.graphics.BitmapFactory.Options();
+    o.inJustDecodeBounds=true;android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath(),o);
+    o.inSampleSize=1;
+    while(o.outWidth/o.inSampleSize>2048||o.outHeight/o.inSampleSize>2048)o.inSampleSize*=2;
+    o.inJustDecodeBounds=false;
+    return android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath(),o);
+  }
   private void displayNewsPhoto(ImageView photo,String url){
     if(url==null||!url.startsWith("https://"))return;
     new Thread(()->{
-      HttpURLConnection c=null;
-      try{
-        c=(HttpURLConnection)new URL(url).openConnection();
-        c.setConnectTimeout(10000);c.setReadTimeout(12000);c.setInstanceFollowRedirects(true);
-        c.setRequestProperty("User-Agent","Mozilla/5.0 (Android; MalinForest Kiosk)");
-        c.setRequestProperty("Referer","https://malinapk.net/");
-        try(InputStream in=c.getInputStream()){
-          android.graphics.Bitmap bmp=android.graphics.BitmapFactory.decodeStream(in);
-          if(bmp!=null)runOnUiThread(()->{
-            if(screenNewsShowing&&photo==activeNewsPhotoView&&url.equals(activeNewsPhotos.get(activeNewsPhotoIndex)))
-              photo.setImageBitmap(bmp);
-          });
-        }
-      }catch(Exception ignored){}finally{if(c!=null)c.disconnect();}
-    }).start();
+      File file=cachedPhoto(url);
+      android.graphics.Bitmap bmp=decodeNewsBitmap(file);
+      if(bmp!=null)runOnUiThread(()->{
+        if(screenNewsShowing&&photo==activeNewsPhotoView&&activeNewsPhotoIndex<activeNewsPhotos.size()
+            &&url.equals(activeNewsPhotos.get(activeNewsPhotoIndex)))photo.setImageBitmap(bmp);
+      });
+      trimPhotoCache();
+    },"news-photo").start();
+  }
+  private void prefetchNewsPhotos(ArrayList<ScreenNews> items){
+    new Thread(()->{
+      for(ScreenNews n:items){
+        if(n.id==null||!n.id.startsWith("https://malinapk.net/"))continue;
+        String cover=absoluteArticleImage(n.image,n.id);
+        if(!cover.isEmpty())cachedPhoto(cover);
+        try{
+          String page=fetch(n.id);
+          String article=articleContentHtml(page);
+          ArrayList<String> urls=articlePhotos(article,page,n.id,n.image);
+          for(String url:urls)cachedPhoto(url);
+        }catch(Exception ignored){}
+        trimPhotoCache();
+      }
+    },"news-photo-prefetch").start();
   }
 
   private void loadNewsPhoto(ImageView photo,ScreenNews news){
@@ -1458,6 +1546,7 @@ public class MainActivity extends Activity {
           HashSet<String> current=new HashSet<>();
           for(ScreenNews n:fresh)current.add(n.id);
           displayedNewsIds.retainAll(current);
+          prefetchNewsPhotos(new ArrayList<>(fresh));
         }
         getPreferences(0).edit().putString("screen_news_status",
           fresh.isEmpty()?"Новин не завантажено. "+finalError:"Завантажено новин: "+fresh.size()).apply();
@@ -1476,24 +1565,21 @@ public class MainActivity extends Activity {
       int left=mapPos[0]-textPos[0],top=mapPos[1]-textPos[1];
       int right=left+alertTile.getWidth(),bottom=top+alertTile.getHeight();
       if(right>0&&left<width&&bottom>0&&top<height){
-        int gap=dp(12);
-        // A CSS float reserves only the occupied area; the remaining lines flow around it.
-        if(left+right<width){side="left";floatWidth=Math.min(width,Math.max(0,right+gap));}
-        else{side="right";floatWidth=Math.min(width,Math.max(0,width-left+gap));}
-        floatTop=Math.max(0,top);
-        floatHeight=Math.min(height-floatTop,Math.max(0,bottom-floatTop+gap));
+        int horizontalGap=dp(20),verticalGap=dp(18);
+        side=(left+right<width)?"left":"right";
+        floatWidth=Math.min(width,Math.max(0,"left".equals(side)?right+horizontalGap:width-left+horizontalGap));
+        floatTop=Math.max(0,top-verticalGap);
+        floatHeight=Math.min(height-floatTop,Math.max(0,bottom-floatTop+dp(12)));
       }
     }
     float density=getResources().getDisplayMetrics().density;
     String floatHtml="";
     if(floatWidth>0&&floatHeight>0){
-      // The float occupies the full text height, but shape-outside excludes ONLY
-      // the map's actual vertical interval. Lines above and below use full width.
-      float topCss=floatTop/density;
-      float bottomCss=(floatTop+floatHeight)/density;
-      floatHtml="<div style='float:"+side+";width:"+(floatWidth/density)+"px;height:"+(height/density)+"px;"
-        +"shape-outside:polygon(0 "+topCss+"px,100% "+topCss+"px,100% "+bottomCss+"px,0 "+bottomCss+"px);"
-        +"shape-margin:0px;pointer-events:none'></div>";
+      // Actual floated box with top margin: text above/below uses full width.
+      // Unlike shape-outside, this also works on older Android WebViews.
+      floatHtml="<div style='float:"+side+";clear:"+side+";width:"+(floatWidth/density)
+        +"px;height:"+(floatHeight/density)+"px;margin-top:"+(floatTop/density)
+        +"px;pointer-events:none'></div>";
     }
     String title=android.text.TextUtils.htmlEncode(screenNewsTitle);
     String body=android.text.TextUtils.htmlEncode(screenNewsBody).replace("\n","<br>");
