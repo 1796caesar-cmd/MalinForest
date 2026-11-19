@@ -559,18 +559,18 @@ public class MainActivity extends Activity {
     if(getPreferences(0).getBoolean("screen_news_enabled",false)
         &&completedVideosSinceNews>=interval&&!silenceActive&&!birthdayShowing&&gameOverlay==null
         &&!screenNews.isEmpty()){
-      try{showScreenNews();}catch(Exception e){screenNewsShowing=false;playCurrent();}
+      showScreenNews();
     }else playCurrent();
   }
   // Open the exact article currently displayed between videos.
   private String activeScreenNewsUrl=null;
   private void openDisplayedNews(){
     String articleUrl=activeScreenNewsUrl;
-    if(articleUrl!=null&&articleUrl.startsWith("https://malinapk.net/"))showSite(articleUrl);
-    else showSite();
+    showSite();
+    if(siteOpen&&articleUrl!=null&&articleUrl.startsWith("https://malinapk.net/"))
+      web.loadUrl(articleUrl);
   }
-  private void showSite(){showSite(null);}
-  private void showSite(String targetUrl){
+  private void showSite(){
     if(siteOpen||birthdayShowing)return;
     if(screenNewsShowing){screenNewsShowing=false;handler.removeCallbacks(closeScreenNews);screenNewsPanel.setVisibility(View.GONE);screenNewsPanel.removeAllViews();screenNewsText=null;handler.removeCallbacks(nextNewsPhoto);activeNewsPhotos.clear();activeNewsPhotoView=null;}
     siteOpen=true;lastPosition=video.getCurrentPosition();
@@ -581,8 +581,7 @@ public class MainActivity extends Activity {
     // Верхня панель у режимі сайту непрозора.
     LinearLayout top=topPanel;
     top.setBackgroundColor(0xFF142A20);
-    if(targetUrl!=null&&targetUrl.startsWith("https://malinapk.net/"))web.loadUrl(targetUrl);
-    else if(web.getUrl()==null||"about:blank".equals(web.getUrl()))web.loadUrl(SITE);
+    if(web.getUrl()==null||"about:blank".equals(web.getUrl()))web.loadUrl(SITE);
     lastTouch=System.currentTimeMillis();scheduleIdle();
   }
   private void showVideo(){
@@ -1135,8 +1134,7 @@ public class MainActivity extends Activity {
       "Час одного фото: "+p.getInt("screen_news_photo_seconds",10)+" с",
       (p.getBoolean("screen_news_games_button",false)?"☑":"☐")+" Кнопка ігор під час новини",
       "Оновити новини зараз",
-      "Стан: "+p.getString("screen_news_status","Ще не перевірено"),
-      "Стаття: "+p.getString("screen_news_article_status","Ще не відкривали")
+      "Стан: "+p.getString("screen_news_status","Ще не перевірено")
     };
     new AlertDialog.Builder(this).setTitle("Новини між відео")
       .setItems(options,(dialog,which)->{
@@ -1352,7 +1350,7 @@ public class MainActivity extends Activity {
         try(InputStream in=c.getInputStream()){
           android.graphics.Bitmap bmp=android.graphics.BitmapFactory.decodeStream(in);
           if(bmp!=null)runOnUiThread(()->{
-            if(screenNewsShowing&&photo==activeNewsPhotoView&&activeNewsPhotoIndex<activeNewsPhotos.size()&&url.equals(activeNewsPhotos.get(activeNewsPhotoIndex)))
+            if(screenNewsShowing&&photo==activeNewsPhotoView&&url.equals(activeNewsPhotos.get(activeNewsPhotoIndex)))
               photo.setImageBitmap(bmp);
           });
         }
@@ -1386,18 +1384,6 @@ public class MainActivity extends Activity {
       if(value.find())return plain(value.group(1));
     }
     return "";
-  }
-  // Accept the article URLs emitted by RSS (http, https, www, relative paths).
-  private String normalizedNewsArticleUrl(String raw){
-    if(raw==null||raw.trim().isEmpty())return "";
-    try{
-      String value=android.text.Html.fromHtml(raw.trim(),android.text.Html.FROM_HTML_MODE_LEGACY).toString().trim();
-      if(value.startsWith("//"))value="https:"+value;
-      java.net.URL resolved=new java.net.URL(new java.net.URL("https://malinapk.net/"),value);
-      String host=resolved.getHost().toLowerCase(java.util.Locale.ROOT);
-      if(!"malinapk.net".equals(host)&&!"www.malinapk.net".equals(host))return "";
-      return new java.net.URL("https", "malinapk.net", resolved.getPort(),resolved.getFile()).toString();
-    }catch(Exception e){return "";}
   }
   private String absoluteNewsUrl(String href){
     if(href.startsWith("https://malinapk.net/"))return href;
@@ -1435,8 +1421,7 @@ public class MainActivity extends Activity {
               else if("pubDate".equalsIgnoreCase(tag))date=parser.nextText();
             }
           }else if(event==org.xmlpull.v1.XmlPullParser.END_TAG&&"item".equalsIgnoreCase(parser.getName())&&inItem){
-            String articleUrl=normalizedNewsArticleUrl(link);
-            if(!articleUrl.isEmpty()&&!title.isEmpty())fresh.add(new ScreenNews(articleUrl,plain(title),plain(description),photo,"MALINAPK.NET",date));
+            if(!link.isEmpty()&&!title.isEmpty())fresh.add(new ScreenNews(link,plain(title),plain(description),photo,"MALINAPK.NET",date));
             inItem=false;if(fresh.size()>=30)break;
           }
         }
@@ -1491,21 +1476,24 @@ public class MainActivity extends Activity {
       int left=mapPos[0]-textPos[0],top=mapPos[1]-textPos[1];
       int right=left+alertTile.getWidth(),bottom=top+alertTile.getHeight();
       if(right>0&&left<width&&bottom>0&&top<height){
-        int horizontalGap=dp(20),verticalGap=dp(18);
-        side=(left+right<width)?"left":"right";
-        floatWidth=Math.min(width,Math.max(0,"left".equals(side)?right+horizontalGap:width-left+horizontalGap));
-        floatTop=Math.max(0,top-verticalGap);
-        floatHeight=Math.min(height-floatTop,Math.max(0,bottom-floatTop+dp(12)));
+        int gap=dp(12);
+        // A CSS float reserves only the occupied area; the remaining lines flow around it.
+        if(left+right<width){side="left";floatWidth=Math.min(width,Math.max(0,right+gap));}
+        else{side="right";floatWidth=Math.min(width,Math.max(0,width-left+gap));}
+        floatTop=Math.max(0,top);
+        floatHeight=Math.min(height-floatTop,Math.max(0,bottom-floatTop+gap));
       }
     }
     float density=getResources().getDisplayMetrics().density;
     String floatHtml="";
     if(floatWidth>0&&floatHeight>0){
-      // Actual floated box with top margin: text above/below uses full width.
-      // Unlike shape-outside, this also works on older Android WebViews.
-      floatHtml="<div style='float:"+side+";clear:"+side+";width:"+(floatWidth/density)
-        +"px;height:"+(floatHeight/density)+"px;margin-top:"+(floatTop/density)
-        +"px;pointer-events:none'></div>";
+      // The float occupies the full text height, but shape-outside excludes ONLY
+      // the map's actual vertical interval. Lines above and below use full width.
+      float topCss=floatTop/density;
+      float bottomCss=(floatTop+floatHeight)/density;
+      floatHtml="<div style='float:"+side+";width:"+(floatWidth/density)+"px;height:"+(height/density)+"px;"
+        +"shape-outside:polygon(0 "+topCss+"px,100% "+topCss+"px,100% "+bottomCss+"px,0 "+bottomCss+"px);"
+        +"shape-margin:0px;pointer-events:none'></div>";
     }
     String title=android.text.TextUtils.htmlEncode(screenNewsTitle);
     String body=android.text.TextUtils.htmlEncode(screenNewsBody).replace("\n","<br>");
@@ -1518,14 +1506,10 @@ public class MainActivity extends Activity {
   }
 
   private void loadFullNewsText(ScreenNews item){
-    final String articleUrl=normalizedNewsArticleUrl(item.id);
-    if(articleUrl.isEmpty()){
-      getPreferences(0).edit().putString("screen_news_article_status","Некоректне посилання статті: "+item.id).apply();
-      return;
-    }
+    if(item.id==null||!item.id.startsWith("https://malinapk.net/"))return;
     new Thread(()->{
       try{
-        String html=fetch(articleUrl);
+        String html=fetch(item.id);
         String article=articleContentHtml(html);
         String content=articleFromStructuredData(html);
         if(content.length()<160)content=articlePlain(article);
@@ -1537,7 +1521,7 @@ public class MainActivity extends Activity {
             if(mainText.length()>content.length())content=mainText;
           }
         }
-        ArrayList<String> photos=articlePhotos(article,html,articleUrl,item.image);
+        ArrayList<String> photos=articlePhotos(article,html,item.id,item.image);
         // Clean navigation, duplicate title and missing-image markers from article text.
         content=content.replaceAll("(?im)^\\s*(?:[<«]?\\s*Попередня новина|Наступна новина\\s*[>»]?)\\s*$","");
         content=content.replaceAll("(?im)^\\s*(?:\\[?об.?\\]?|🖼|￼)\\s*$","");
@@ -1552,9 +1536,6 @@ public class MainActivity extends Activity {
           content=clean.toString().trim();
         }
         final String full=content.replaceAll("\\n{3,}","\\n\\n").trim();
-        getPreferences(0).edit().putString("screen_news_article_status",
-          "Стаття: "+(full.isEmpty()?"текст не знайдено":"текст "+full.length()+" символів")+
-          ", фото "+photos.size()).apply();
         runOnUiThread(()->{
           if(!screenNewsShowing||screenNewsText==null||!item.title.equals(screenNewsTitle))return;
           if(!full.isEmpty()){
@@ -1563,14 +1544,13 @@ public class MainActivity extends Activity {
           }
           if(!photos.isEmpty()&&activeNewsPhotoView!=null){
             handler.removeCallbacks(nextNewsPhoto);
-            activeNewsPhotos.clear();activeNewsPhotos.add(photos.get(0));
+            activeNewsPhotos.clear();activeNewsPhotos.addAll(photos);
             activeNewsPhotoIndex=0;
             displayNewsPhoto(activeNewsPhotoView,activeNewsPhotos.get(0));
+            if(activeNewsPhotos.size()>1)handler.postDelayed(nextNewsPhoto,newsPhotoDurationMs());
           }
         });
-      }catch(Exception error){
-        getPreferences(0).edit().putString("screen_news_article_status",error.getClass().getSimpleName()+": "+error.getMessage()).apply();
-      }
+      }catch(Exception ignored){}
     }).start();
   }
 
@@ -1637,9 +1617,6 @@ public class MainActivity extends Activity {
       return true;
     });
     body.addView(screenNewsText,new LinearLayout.LayoutParams(0,-1,1.05f));
-    screenNewsText.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,oright,ob)->{
-      if(r-l>0&&b-t>0&&(r-l!=oright-ol||b-t!=ob-ot))updateNewsTextFlow();
-    });
     screenNewsText.post(()->updateNewsTextFlow());
     FrameLayout photoHolder=new FrameLayout(this);
     photoHolder.setBackgroundColor(0x55244936);
