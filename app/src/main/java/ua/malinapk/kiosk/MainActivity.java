@@ -1135,7 +1135,8 @@ public class MainActivity extends Activity {
       "Час одного фото: "+p.getInt("screen_news_photo_seconds",10)+" с",
       (p.getBoolean("screen_news_games_button",false)?"☑":"☐")+" Кнопка ігор під час новини",
       "Оновити новини зараз",
-      "Стан: "+p.getString("screen_news_status","Ще не перевірено")
+      "Стан: "+p.getString("screen_news_status","Ще не перевірено"),
+      "Стаття: "+p.getString("screen_news_article_status","Ще не відкривали")
     };
     new AlertDialog.Builder(this).setTitle("Новини між відео")
       .setItems(options,(dialog,which)->{
@@ -1386,6 +1387,18 @@ public class MainActivity extends Activity {
     }
     return "";
   }
+  // Accept the article URLs emitted by RSS (http, https, www, relative paths).
+  private String normalizedNewsArticleUrl(String raw){
+    if(raw==null||raw.trim().isEmpty())return "";
+    try{
+      String value=android.text.Html.fromHtml(raw.trim(),android.text.Html.FROM_HTML_MODE_LEGACY).toString().trim();
+      if(value.startsWith("//"))value="https:"+value;
+      java.net.URL resolved=new java.net.URL(new java.net.URL("https://malinapk.net/"),value);
+      String host=resolved.getHost().toLowerCase(java.util.Locale.ROOT);
+      if(!"malinapk.net".equals(host)&&!"www.malinapk.net".equals(host))return "";
+      return new java.net.URL("https", "malinapk.net", resolved.getPort(),resolved.getFile()).toString();
+    }catch(Exception e){return "";}
+  }
   private String absoluteNewsUrl(String href){
     if(href.startsWith("https://malinapk.net/"))return href;
     if(href.startsWith("/"))return "https://malinapk.net"+href;
@@ -1422,7 +1435,8 @@ public class MainActivity extends Activity {
               else if("pubDate".equalsIgnoreCase(tag))date=parser.nextText();
             }
           }else if(event==org.xmlpull.v1.XmlPullParser.END_TAG&&"item".equalsIgnoreCase(parser.getName())&&inItem){
-            if(!link.isEmpty()&&!title.isEmpty())fresh.add(new ScreenNews(link,plain(title),plain(description),photo,"MALINAPK.NET",date));
+            String articleUrl=normalizedNewsArticleUrl(link);
+            if(!articleUrl.isEmpty()&&!title.isEmpty())fresh.add(new ScreenNews(articleUrl,plain(title),plain(description),photo,"MALINAPK.NET",date));
             inItem=false;if(fresh.size()>=30)break;
           }
         }
@@ -1504,10 +1518,14 @@ public class MainActivity extends Activity {
   }
 
   private void loadFullNewsText(ScreenNews item){
-    if(item.id==null||!item.id.startsWith("https://malinapk.net/"))return;
+    final String articleUrl=normalizedNewsArticleUrl(item.id);
+    if(articleUrl.isEmpty()){
+      getPreferences(0).edit().putString("screen_news_article_status","Некоректне посилання статті: "+item.id).apply();
+      return;
+    }
     new Thread(()->{
       try{
-        String html=fetch(item.id);
+        String html=fetch(articleUrl);
         String article=articleContentHtml(html);
         String content=articleFromStructuredData(html);
         if(content.length()<160)content=articlePlain(article);
@@ -1519,7 +1537,7 @@ public class MainActivity extends Activity {
             if(mainText.length()>content.length())content=mainText;
           }
         }
-        ArrayList<String> photos=articlePhotos(article,html,item.id,item.image);
+        ArrayList<String> photos=articlePhotos(article,html,articleUrl,item.image);
         // Clean navigation, duplicate title and missing-image markers from article text.
         content=content.replaceAll("(?im)^\\s*(?:[<«]?\\s*Попередня новина|Наступна новина\\s*[>»]?)\\s*$","");
         content=content.replaceAll("(?im)^\\s*(?:\\[?об.?\\]?|🖼|￼)\\s*$","");
@@ -1534,6 +1552,9 @@ public class MainActivity extends Activity {
           content=clean.toString().trim();
         }
         final String full=content.replaceAll("\\n{3,}","\\n\\n").trim();
+        getPreferences(0).edit().putString("screen_news_article_status",
+          "Стаття: "+(full.isEmpty()?"текст не знайдено":"текст "+full.length()+" символів")+
+          ", фото "+photos.size()).apply();
         runOnUiThread(()->{
           if(!screenNewsShowing||screenNewsText==null||!item.title.equals(screenNewsTitle))return;
           if(!full.isEmpty()){
@@ -1547,7 +1568,9 @@ public class MainActivity extends Activity {
             displayNewsPhoto(activeNewsPhotoView,activeNewsPhotos.get(0));
           }
         });
-      }catch(Exception ignored){}
+      }catch(Exception error){
+        getPreferences(0).edit().putString("screen_news_article_status",error.getClass().getSimpleName()+": "+error.getMessage()).apply();
+      }
     }).start();
   }
 
@@ -1614,6 +1637,9 @@ public class MainActivity extends Activity {
       return true;
     });
     body.addView(screenNewsText,new LinearLayout.LayoutParams(0,-1,1.05f));
+    screenNewsText.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,oright,ob)->{
+      if(r-l>0&&b-t>0&&(r-l!=oright-ol||b-t!=ob-ot))updateNewsTextFlow();
+    });
     screenNewsText.post(()->updateNewsTextFlow());
     FrameLayout photoHolder=new FrameLayout(this);
     photoHolder.setBackgroundColor(0x55244936);
