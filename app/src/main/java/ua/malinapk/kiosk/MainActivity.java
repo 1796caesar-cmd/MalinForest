@@ -1311,12 +1311,18 @@ public class MainActivity extends Activity {
     float density=getResources().getDisplayMetrics().density;
     String floatHtml="";
     if(floatWidth>0&&floatHeight>0){
-      floatHtml="<div style='float:"+side+";width:"+(floatWidth/density)+"px;height:"+(floatHeight/density)+"px;margin-top:"+(floatTop/density)+"px'></div>";
+      // The float occupies the full text height, but shape-outside excludes ONLY
+      // the map's actual vertical interval. Lines above and below use full width.
+      float topCss=floatTop/density;
+      float bottomCss=(floatTop+floatHeight)/density;
+      floatHtml="<div style='float:"+side+";width:"+(floatWidth/density)+"px;height:"+(height/density)+"px;"
+        +"shape-outside:polygon(0 "+topCss+"px,100% "+topCss+"px,100% "+bottomCss+"px,0 "+bottomCss+"px);"
+        +"shape-margin:0px;pointer-events:none'></div>";
     }
     String title=android.text.TextUtils.htmlEncode(screenNewsTitle);
     String body=android.text.TextUtils.htmlEncode(screenNewsBody).replace("\n","<br>");
     String html="<!doctype html><html lang='uk'><head><meta name='viewport' content='width=device-width,initial-scale=1,user-scalable=no'>"
-      +"<style>html,body{margin:0;padding:0;background:transparent;color:#f4f8f3;font-family:sans-serif;}"
+      +"<style>html,body{margin:0;padding:0;overflow:hidden;background:transparent;color:#f4f8f3;font-family:sans-serif;}"
       +"body{padding:8px 16px 12px 8px;box-sizing:border-box;}h1{font-size:27px;line-height:1.22;margin:0 0 18px;font-weight:700;}"
       +"p{font-size:19px;line-height:1.42;margin:0;white-space:normal;}div{box-sizing:border-box;}</style></head><body>"
       +floatHtml+"<h1>"+title+"</h1><p>"+body+"</p></body></html>";
