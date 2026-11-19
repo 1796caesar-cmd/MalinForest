@@ -108,7 +108,7 @@ public class MainActivity extends Activity {
   private long newsRefreshAt=0;
   private final Runnable closeScreenNews=()->finishScreenNews();
   private final Runnable newsPoll=new Runnable(){@Override public void run(){
-    if(getPreferences(0).getBoolean("screen_news_enabled",false))refreshScreenNews();
+    if(getPreferences(0).getBoolean("screen_news_enabled",false)){restoreNewsFeed();refreshScreenNews();}
     handler.postDelayed(this,5*60*1000L);
   }};
 
@@ -1345,7 +1345,7 @@ public class MainActivity extends Activity {
   private static final long PHOTO_CACHE_LIMIT=200L*1024*1024;
   private final Object photoCacheLock=new Object();
   private File photoCacheDir(){
-    File dir=new File(getCacheDir(),"malinforest_news_photos");
+    File dir=new File(getFilesDir(),"malinforest_news_photos");
     if(!dir.exists())dir.mkdirs();
     return dir;
   }
@@ -1429,30 +1429,105 @@ public class MainActivity extends Activity {
       trimPhotoCache();
     },"news-photo").start();
   }
+  // Complete offline news cache: article text, metadata and one validated cover photo.
+  private final Object newsDataLock=new Object();
+  private File newsDataDir(){
+    File dir=new File(getFilesDir(),"malinforest_news_articles");
+    if(!dir.exists())dir.mkdirs();
+    return dir;
+  }
+  private File newsDataFile(String id){
+    try{
+      byte[] hash=java.security.MessageDigest.getInstance("SHA-256").digest(id.getBytes("UTF-8"));
+      StringBuilder name=new StringBuilder();
+      for(byte b:hash)name.append(String.format(java.util.Locale.US,"%02x",b&255));
+      return new File(newsDataDir(),name+".json");
+    }catch(Exception e){return null;}
+  }
+  private JSONObject readNewsData(String id){
+    File f=newsDataFile(id);if(f==null||!f.isFile())return null;
+    synchronized(newsDataLock){
+      try(java.io.FileInputStream in=new java.io.FileInputStream(f);ByteArrayOutputStream out=new ByteArrayOutputStream()){
+        byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);
+        return new JSONObject(out.toString("UTF-8"));
+      }catch(Exception ignored){return null;}
+    }
+  }
+  private void saveNewsData(JSONObject data,String id){
+    File target=newsDataFile(id);if(target==null)return;
+    synchronized(newsDataLock){
+      File tmp=new File(target.getAbsolutePath()+".tmp");
+      try(FileOutputStream out=new FileOutputStream(tmp)){
+        out.write(data.toString().getBytes("UTF-8"));out.flush();
+        if(target.exists())target.delete();
+        if(!tmp.renameTo(target))tmp.delete();
+      }catch(Exception ignored){tmp.delete();}
+    }
+  }
+  private String cleanNewsArticle(String content,String title){
+    content=content.replaceAll("(?im)^\\s*(?:[<«]?\\s*Попередня новина|Наступна новина\\s*[>»]?)\\s*$","");
+    content=content.replaceAll("(?im)^\\s*(?:\\[?об.?\\]?|🖼|￼)\\s*$","");
+    String normalized=title==null?"":title.trim().replaceAll("[\\s!?.:«»\"'–—-]+","");
+    if(!normalized.isEmpty()){
+      StringBuilder clean=new StringBuilder();
+      for(String line:content.split("\\n",-1)){
+        if(line.trim().replaceAll("[\\s!?.:«»\"'–—-]+","").equalsIgnoreCase(normalized))continue;
+        clean.append(line).append('\n');
+      }
+      content=clean.toString();
+    }
+    return content.replaceAll("\\n{3,}","\\n\\n").trim();
+  }
   private void prefetchNewsPhotos(ArrayList<ScreenNews> items){
     new Thread(()->{
       for(ScreenNews n:items){
         if(n.id==null||!n.id.startsWith("https://malinapk.net/"))continue;
-        String cover=absoluteArticleImage(n.image,n.id);
-        if(!cover.isEmpty())cachedPhoto(cover);
         try{
-          String page=fetch(n.id);
-          String article=articleContentHtml(page);
-          ArrayList<String> urls=articlePhotos(article,page,n.id,n.image);
-          for(String url:urls)cachedPhoto(url);
+          JSONObject existing=readNewsData(n.id);
+          // Reuse complete article if already saved, but retry missing/invalid photos.
+          String content=existing==null?"":existing.optString("body","");
+          String cover=existing==null?"":existing.optString("photo","");
+          if(content.isEmpty()||cover.isEmpty()){
+            String page=fetch(n.id);
+            String article=articleContentHtml(page);
+            String full=articleFromStructuredData(page);
+            if(full.length()<160)full=articlePlain(article);
+            if(full.length()<160){
+              Matcher main=Pattern.compile("(?is)<main\\b[^>]*>(.*?)</main>").matcher(page);
+              if(main.find()){String t=articlePlain(main.group(1));if(t.length()>full.length())full=t;}
+            }
+            if(!full.isEmpty())content=cleanNewsArticle(full,n.title);
+            ArrayList<String> photos=articlePhotos(article,page,n.id,n.image);
+            // Prefer RSS/OG cover; never rotate through article photos.
+            String rss=absoluteArticleImage(n.image,n.id);
+            if(!rss.isEmpty())cover=rss;
+            else if(!photos.isEmpty())cover=photos.get(0);
+          }
+          File file=cover.isEmpty()?null:cachedPhoto(cover);
+          if(file!=null&&decodeNewsBitmap(file)==null){file.delete();file=cachedPhoto(cover);}
+          if(file==null||decodeNewsBitmap(file)==null)continue;
+          JSONObject data=new JSONObject();
+          data.put("id",n.id);data.put("title",n.title);data.put("body",content.isEmpty()?n.description:content);
+          data.put("description",n.description);data.put("photo",cover);
+          data.put("source",n.source);data.put("date",n.date);
+          saveNewsData(data,n.id);
         }catch(Exception ignored){}
         trimPhotoCache();
       }
-    },"news-photo-prefetch").start();
+    },"news-complete-prefetch").start();
   }
 
   private void loadNewsPhoto(ImageView photo,ScreenNews news){
     activeNewsPhotoView=photo;
     activeNewsPhotos.clear();activeNewsPhotoIndex=0;
-    String cover=absoluteArticleImage(news.image,news.id);
+    JSONObject data=readNewsData(news.id);
+    String cover=data==null?"":data.optString("photo","");
     if(!cover.isEmpty()){
       activeNewsPhotos.add(cover);
-      displayNewsPhoto(photo,cover);
+      File file=photoCacheFile(cover);
+      android.graphics.Bitmap bitmap=decodeNewsBitmap(file);
+      if(bitmap!=null)photo.setImageBitmap(bitmap);
+      else displayNewsPhoto(photo,cover);
     }
   }
 
@@ -1479,6 +1554,26 @@ public class MainActivity extends Activity {
     if(href.startsWith("novini/"))return "https://malinapk.net/"+href;
     return "";
   }
+  private void saveNewsFeed(ArrayList<ScreenNews> items){
+    try{
+      JSONArray array=new JSONArray();
+      for(ScreenNews n:items){JSONObject o=new JSONObject();o.put("id",n.id);o.put("title",n.title);
+        o.put("description",n.description);o.put("image",n.image);o.put("source",n.source);o.put("date",n.date);array.put(o);}
+      getPreferences(0).edit().putString("news_cached_feed",array.toString()).apply();
+    }catch(Exception ignored){}
+  }
+  private void restoreNewsFeed(){
+    try{
+      JSONArray array=new JSONArray(getPreferences(0).getString("news_cached_feed","[]"));
+      for(int i=0;i<array.length();i++){
+        JSONObject o=array.getJSONObject(i);
+        ScreenNews n=new ScreenNews(o.optString("id"),o.optString("title"),o.optString("description"),
+          o.optString("image"),o.optString("source"),o.optString("date"));
+        if(isNewsReady(n))screenNews.add(n);
+      }
+    }catch(Exception ignored){}
+  }
+
   private void refreshScreenNews(){
     long now=System.currentTimeMillis();
     if(now-newsRefreshAt<30000)return;
@@ -1543,6 +1638,7 @@ public class MainActivity extends Activity {
       runOnUiThread(()->{
         if(!fresh.isEmpty()){
           screenNews.clear();screenNews.addAll(fresh);
+          saveNewsFeed(fresh);
           HashSet<String> current=new HashSet<>();
           for(ScreenNews n:fresh)current.add(n.id);
           displayedNewsIds.retainAll(current);
@@ -1592,59 +1688,29 @@ public class MainActivity extends Activity {
   }
 
   private void loadFullNewsText(ScreenNews item){
-    if(item.id==null||!item.id.startsWith("https://malinapk.net/"))return;
-    new Thread(()->{
-      try{
-        String html=fetch(item.id);
-        String article=articleContentHtml(html);
-        String content=articleFromStructuredData(html);
-        if(content.length()<160)content=articlePlain(article);
-        // A short RSS teaser must never replace a longer article body.
-        if(content.length()<160){
-          Matcher main=Pattern.compile("(?is)<main\\b[^>]*>(.*?)</main>").matcher(html);
-          if(main.find()){
-            String mainText=articlePlain(main.group(1));
-            if(mainText.length()>content.length())content=mainText;
-          }
-        }
-        ArrayList<String> photos=articlePhotos(article,html,item.id,item.image);
-        // Clean navigation, duplicate title and missing-image markers from article text.
-        content=content.replaceAll("(?im)^\\s*(?:[<«]?\\s*Попередня новина|Наступна новина\\s*[>»]?)\\s*$","");
-        content=content.replaceAll("(?im)^\\s*(?:\\[?об.?\\]?|🖼|￼)\\s*$","");
-        String repeatedTitle=item.title==null?"":item.title.trim();
-        if(!repeatedTitle.isEmpty()){
-          String normalizedTitle=repeatedTitle.replaceAll("[\\s!?.:«»\"'–—-]+","");
-          StringBuilder clean=new StringBuilder();
-          for(String line:content.split("\\n",-1)){
-            if(line.trim().replaceAll("[\\s!?.:«»\"'–—-]+","").equalsIgnoreCase(normalizedTitle))continue;
-            clean.append(line).append('\n');
-          }
-          content=clean.toString().trim();
-        }
-        final String full=content.replaceAll("\\n{3,}","\\n\\n").trim();
-        runOnUiThread(()->{
-          if(!screenNewsShowing||screenNewsText==null||!item.title.equals(screenNewsTitle))return;
-          if(!full.isEmpty()){
-            screenNewsBody=full;
-            updateNewsTextFlow();
-          }
-          if(!photos.isEmpty()&&activeNewsPhotoView!=null){
-            handler.removeCallbacks(nextNewsPhoto);
-            activeNewsPhotos.clear();activeNewsPhotos.addAll(photos);
-            activeNewsPhotoIndex=0;
-            displayNewsPhoto(activeNewsPhotoView,activeNewsPhotos.get(0));
-            if(activeNewsPhotos.size()>1)handler.postDelayed(nextNewsPhoto,newsPhotoDurationMs());
-          }
-        });
-      }catch(Exception ignored){}
-    }).start();
+    JSONObject data=readNewsData(item.id);
+    if(data==null)return;
+    String full=data.optString("body","");
+    if(!full.isEmpty()&&screenNewsShowing&&item.id.equals(activeScreenNewsUrl)){
+      screenNewsBody=full;
+      updateNewsTextFlow();
+    }
+  }
+
+  private boolean isNewsReady(ScreenNews item){
+    JSONObject data=readNewsData(item.id);
+    if(data==null||data.optString("body","").isEmpty())return false;
+    String url=data.optString("photo","");
+    File file=photoCacheFile(url);
+    return file!=null&&file.isFile()&&file.length()>100;
   }
 
   private void showScreenNews(){
     if(screenNewsShowing||screenNews.isEmpty())return;
     ScreenNews selected=null;
-    for(ScreenNews item:screenNews)if(!displayedNewsIds.contains(item.id)){selected=item;break;}
-    if(selected==null){displayedNewsIds.clear();selected=screenNews.get(0);}
+    for(ScreenNews item:screenNews)if(!displayedNewsIds.contains(item.id)&&isNewsReady(item)){selected=item;break;}
+    if(selected==null){displayedNewsIds.clear();for(ScreenNews item:screenNews)if(isNewsReady(item)){selected=item;break;}}
+    if(selected==null)return;
     displayedNewsIds.add(selected.id);
     completedVideosSinceNews=0;
     screenNewsShowing=true;
