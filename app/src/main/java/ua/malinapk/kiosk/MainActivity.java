@@ -791,7 +791,7 @@ public class MainActivity extends Activity {
     }
     return Math.max(0,Math.min(ALERT_SOURCE_URLS.length-1,prefs.getInt("alert_source",0)));
   }
-  private int dimapZoom(){return Math.max(0,Math.min(2,getPreferences(0).getInt("dimap_zoom",2)));}
+  private int dimapZoom(){return Math.max(0,Math.min(2,getPreferences(0).getInt("dimap_zoom",0)));}
   private static final String ALERT_MUTE_JS=
       "(function(){\n" +
       " if(window.__mfAudioMuted)return;window.__mfAudioMuted=true;\n" +
@@ -812,8 +812,12 @@ public class MainActivity extends Activity {
       " var target=views[mode];if(!target)return;\n" +
       " function isMap(m){try{return m&&typeof m.getCenter==='function'&&typeof m.getZoom==='function'&&(typeof m.jumpTo==='function'||typeof m.setView==='function');}catch(e){return false;}}\n" +
       " function apply(m){if(done||!isMap(m))return false;found=m;try{\n" +
-      "  if(typeof m.jumpTo==='function'){if(typeof m.loaded==='function'&&!m.loaded()&&typeof m.isStyleLoaded==='function'&&!m.isStyleLoaded())return false;m.jumpTo({center:[target.lon,target.lat],zoom:target.z});}\n" +
-      "  else {if(!m._loaded)return false;m.setView([target.lat,target.lon],target.z,{animate:false});}\n" +
+      "  if(typeof m.jumpTo==='function'){if(typeof m.loaded==='function'&&!m.loaded()&&typeof m.isStyleLoaded==='function'&&!m.isStyleLoaded())return false;\n" +
+      "   if(mode===0&&typeof m.fitBounds==='function'){m.fitBounds([[22.0,44.2],[40.4,52.5]],{padding:8,duration:0,maxZoom:5});}\n" +
+      "   else m.jumpTo({center:[target.lon,target.lat],zoom:target.z});}\n" +
+      "  else {if(!m._loaded)return false;\n" +
+      "   if(mode===0&&typeof m.fitBounds==='function'){m.fitBounds([[44.2,22.0],[52.5,40.4]],{padding:[8,8],animate:false,maxZoom:5});}\n" +
+      "   else m.setView([target.lat,target.lon],target.z,{animate:false});}\n" +
       "  done=true;return true;\n" +
       " }catch(e){return false;}}\n" +
       " function hook(lib){try{if(!lib||!lib.Map||!lib.Map.prototype)return;var p=lib.Map.prototype;if(p.__mfZoomHook)return;\n" +
@@ -835,7 +839,7 @@ public class MainActivity extends Activity {
       "  if(Date.now()-searchAt<500)return;\n" +
       "  var candidates=document.querySelectorAll('[role=option],button,li,[role=button],a');for(var j=0;j<candidates.length;j++){var el=candidates[j],t=(el.textContent||'').trim();if(t.length>120||!/^Малин(?:\\s|,|$)/i.test(t)||!/Житомир|Коростен/i.test(t))continue;try{el.click();done=true;searchInput.blur();return;}catch(e){}}\n" +
       " }\n" +
-      " var timer=setInterval(function(){inspect();if(!done)searchFallback();if(done||Date.now()-started>18000){clearInterval(timer);if(!done&&searchInput){try{var setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(searchInput,'');searchInput.dispatchEvent(new Event('input',{bubbles:true}));searchInput.blur();}catch(e){}}}},400);\n" +
+      " var timer=setInterval(function(){inspect();if(!done&&mode===2)searchFallback();if(done||Date.now()-started>18000){clearInterval(timer);if(!done&&searchInput){try{var setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(searchInput,'');searchInput.dispatchEvent(new Event('input',{bubbles:true}));searchInput.blur();}catch(e){}}}},400);\n" +
       "})();\n";
   private String dimapZoomScript(){return DIMAP_ZOOM_JS.replace("MF_MODE",String.valueOf(dimapZoom()));}
   private void configureAlertAudio(){
