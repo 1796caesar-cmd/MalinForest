@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+concurrency:
+  group: malinforest-release-${{ github.ref }}
+  cancel-in-progress: false
 permissions:
   contents: write
 jobs:
@@ -25,6 +28,17 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.MALINFOREST_KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/malinforest-release.jks"
+      - name: Determine next version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tags=$(gh api --paginate "repos/$GITHUB_REPOSITORY/tags?per_page=100" --jq '.[].name')
+          releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name')
+          version=$(printf '%s\n%s\n' "$tags" "$releases" | python3 -c 'import sys,re; versions=[39]; versions.extend(int(m[1])*10+int(m[2]) for line in sys.stdin if (m:=re.fullmatch(r"v?([0-9]+)\.([0-9])",line.strip()))); n=max(versions)+1; print(f"{n//10}.{n%10}")')
+          echo "MALINFOREST_VERSION_NAME=$version" >> "$GITHUB_ENV"
+          echo "Next version: $version"
       - name: Build release APK
         env:
           MALINFOREST_KEYSTORE_PATH: ${{ runner.temp }}/malinforest-release.jks
@@ -57,7 +71,8 @@ jobs:
           version="${BASH_REMATCH[1]}"
           tag="v${version}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$apk" --clobber
+            echo "Release $tag already exists; refusing to overwrite" >&2
+            exit 1
           else
             gh release create "$tag" "$apk" --target "$GITHUB_SHA" \
               --title "MalinForest $version" \
