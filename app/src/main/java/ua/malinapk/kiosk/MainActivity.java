@@ -2113,7 +2113,7 @@ public class MainActivity extends Activity {
         "липня","серпня","вересня","жовтня","листопада","грудня"};
       String expectedDate=kyiv.get(Calendar.DAY_OF_MONTH)+" "+monthNames[kyiv.get(Calendar.MONTH)];
       int endSection=html.toLowerCase(Locale.ROOT).indexOf("зараз також тривають");
-      if(endSection<0)throw new IOException("Holiday section not found");
+      if(endSection<0)endSection=html.length();
       String section=html.substring(0,endSection);
       Pattern headings=Pattern.compile("(?is)<h3\\b[^>]*>(.*?)</h3>");
       Matcher m=headings.matcher(section);
