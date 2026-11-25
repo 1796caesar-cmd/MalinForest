@@ -800,6 +800,107 @@ public class MainActivity extends Activity {
       "if(/^(\\+|−|–|-)$/.test(t)||/пошук|геолокац|налаштування|підтримка|знімок|скриншот|zoom in|zoom out|search|geolocate|settings|screenshot/i.test(t)){if(!e.closest('[role=alert],.leaflet-popup,.maplibregl-popup,.mapboxgl-popup'))e.style.setProperty('display','none','important');}}}"+
       "clean();new MutationObserver(clean).observe(document.documentElement,{childList:true,subtree:true});})();";
     view.evaluateJavascript(js,null);
+    if("dimap.live".equals(host)||"www.dimap.live".equals(host)){
+      dismissDimapSupport(view);
+      hideDimapControls(view);
+    }
+  }
+  // Hide only DIMAP toolbar controls; preserve map and warning content.
+  private void hideDimapControls(WebView view){
+    String js=
+      "(function(){\n" +
+      "  if(window.__mfDimapControls)return;\n" +
+      "  window.__mfDimapControls=true;\n" +
+      "  var protectedArea='[role=\"alert\"],[role=\"alertdialog\"],[role=\"dialog\"],dialog,.leaflet-popup,.maplibregl-popup,.mapboxgl-popup';\n" +
+      "  var named=/(?:^|\\s)(?:zoom\\s*(?:in|out|plus|minus)|zoom[+-]|(?:map\\s*)?geolocat(?:e|ion)|(?:map\\s*)?locate(?:\\s*(?:me|user))?|(?:map\\s*)?center(?:ing)?|(?:map\\s*)?centre|(?:map\\s*)?recenter|(?:map\\s*)?gps|screenshot|screen\\s*shot|(?:map\\s*)?camera|(?:take\\s*)?photo|capture\\s*(?:map|screen)|chevron\\s*down|(?:header|toolbar|menu)\\s*(?:toggle|collapse|expand)|наблизити|віддалити|збільшити\\s*масштаб|зменшити\\s*масштаб|центрувати|геолокація|моє\\s*місце|моя\\s*локація|знімок\\s*карти|скриншот|скріншот|фотоапарат|згорнути\\s*(?:меню|панель)|розгорнути\\s*(?:меню|панель))(?:\\s|$)/i;\n" +
+      "  function normalize(s){return (s||'').replace(/([a-z])([A-Z])/g,'$1 $2').replace(/[_-]+/g,' ').trim();}\n" +
+      "  function clean(){\n" +
+      "    var buttons=document.querySelectorAll('button,[role=\"button\"]');\n" +
+      "    for(var i=0;i<buttons.length;i++){\n" +
+      "      var b=buttons[i];\n" +
+      "      if(b.closest(protectedArea)||b.hasAttribute('data-mf-dimap-control'))continue;\n" +
+      "      var r=b.getBoundingClientRect();\n" +
+      "      if(r.width<14||r.height<14||r.width>120||r.height>100||r.right<window.innerWidth*0.55)continue;\n" +
+      "      var text=(b.textContent||'').trim();\n" +
+      "      var svg=b.querySelector('svg');\n" +
+      "      var attrs=[b.id,b.getAttribute('class'),b.getAttribute('aria-label'),b.getAttribute('title'),b.getAttribute('data-tooltip'),svg&&svg.getAttribute('class'),svg&&svg.getAttribute('data-icon'),svg&&svg.getAttribute('aria-label')];\n" +
+      "      if(svg){var use=svg.querySelector('use');if(use)attrs.push(use.getAttribute('href')||use.getAttribute('xlink:href'));}\n" +
+      "      var meta=attrs.map(normalize).join(' ');\n" +
+      "      var hide=/^[+＋−–—-]$/.test(text)||named.test(meta)||named.test(text);\n" +
+      "      // SVG-only toolbar controls sometimes have no accessible name.\n" +
+      "      if(!hide&&svg&&!text&&r.width<=85&&r.height<=85){\n" +
+      "        var circles=svg.querySelectorAll('circle'), lines=svg.querySelectorAll('line'), poly=svg.querySelectorAll('polyline');\n" +
+      "        var paths=Array.from(svg.querySelectorAll('path')).map(function(p){return (p.getAttribute('d')||'').replace(/,/g,' ').replace(/\\s+/g,' ').trim();});\n" +
+      "        var plusMinus=paths.length>0&&paths.length<=2&&paths.every(function(d){return /^M\\s*[-\\d.]+\\s*[-\\d.]+\\s*[hHvV]\\s*[-\\d.]+\\s*$/i.test(d);});\n" +
+      "        var crosshair=circles.length>0&&(lines.length>=2||paths.length>=2)&&r.top<window.innerHeight*0.8;\n" +
+      "        var camera=circles.length===1&&svg.querySelector('rect,path')&&r.top<window.innerHeight*0.18;\n" +
+      "        var chevron=r.top<window.innerHeight*0.18&&poly.length===1&&poly[0].getAttribute('points')&&/^\\s*6[, ]+9\\s+12[, ]+15\\s+18[, ]+9\\s*$/.test(poly[0].getAttribute('points'));\n" +
+      "        hide=plusMinus||crosshair||camera||chevron;\n" +
+      "      }\n" +
+      "      if(hide){b.setAttribute('data-mf-dimap-control','1');b.style.setProperty('display','none','important');}\n" +
+      "    }\n" +
+      "  }\n" +
+      "  clean();\n" +
+      "  window.setInterval(clean,750);\n" +
+      "})();\n";
+    view.evaluateJavascript(js,null);
+  }
+  // Close only the DIMAP donation prompt via its own opt-out and close controls.
+  private void dismissDimapSupport(WebView view){
+    String js=
+      "(function(){\n"+
+      "  if(window.__mfDimapSupportDismiss)return;\n"+
+      "  window.__mfDimapSupportDismiss=true;\n"+
+      "  function visible(e){\n"+
+      "    if(!e || !e.isConnected || !e.getClientRects().length)return false;\n"+
+      "    var r=e.getBoundingClientRect();\n"+
+      "    if(r.width<=0 || r.height<=0 || r.bottom<=0 || r.right<=0 || r.top>=window.innerHeight || r.left>=window.innerWidth)return false;\n"+
+      "    for(var p=e;p && p.nodeType===1;p=p.parentElement){\n"+
+      "      var s=getComputedStyle(p);\n"+
+      "      if(s.display==='none'||s.visibility==='hidden'||s.opacity==='0'||p.getAttribute('aria-hidden')==='true')return false;\n"+
+      "    }\n"+
+      "    return true;\n"+
+      "  }\n"+
+      "  function closeButton(panel){\n"+
+      "    var list=panel.querySelectorAll('button,[role=\"button\"],a');\n"+
+      "    for(var i=0;i<list.length;i++){\n"+
+      "      var b=list[i], t=(b.textContent||'').trim();\n"+
+      "      var a=((b.getAttribute('aria-label')||'')+' '+(b.getAttribute('title')||'')).trim();\n"+
+      "      if(visible(b)&&(/^[×✕✖хx]$/i.test(t)||/^(закрити|close|dismiss)$/i.test(a)))return b;\n"+
+      "    }\n"+
+      "    return null;\n"+
+      "  }\n"+
+      "  var lastPanel=null,lastTry=0;\n"+
+      "  function dismiss(){\n"+
+      "    if(!document.body)return;\n"+
+      "    var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);\n"+
+      "    var n;\n"+
+      "    while((n=walker.nextNode())){\n"+
+      "      if(n.nodeValue.trim()!=='Підтримайте DIMAP'||!visible(n.parentElement))continue;\n"+
+      "      var panel=n.parentElement;\n"+
+      "      for(var depth=0;panel&&panel!==document.body&&depth<8;depth++,panel=panel.parentElement){\n"+
+      "        var t=panel.textContent||'';\n"+
+      "        if(!/Більше не показувати|преміум-підписок/.test(t)||!/Підтримати/.test(t))continue;\n"+
+      "        var close=closeButton(panel);\n"+
+      "        if(!close)continue;\n"+
+      "        if(panel===lastPanel&&Date.now()-lastTry<2000)return;\n"+
+      "        lastPanel=panel;lastTry=Date.now();\n"+
+      "        var inputs=panel.querySelectorAll('input[type=\"checkbox\"]');\n"+
+      "        for(var j=0;j<inputs.length;j++){\n"+
+      "          var c=inputs[j];\n"+
+      "          var labels=c.labels?Array.from(c.labels):[];\n"+
+      "          var labelText=labels.map(function(l){return l.textContent;}).join(' ');\n"+
+      "          var own=(c.getAttribute('aria-label')||'')+' '+labelText;\n"+
+      "          if(!c.disabled&&!c.checked&&(/Більше не показувати/.test(own)||(inputs.length===1&&/Більше не показувати/.test(t)))){c.click();break;}\n"+
+      "        }\n"+
+      "        if(visible(close))close.click();\n"+
+      "        return;\n"+
+      "      }\n"+
+      "    }\n"+
+      "  }\n"+
+      "  dismiss();window.setInterval(dismiss,750);\n"+
+      "})();\n";
+    view.evaluateJavascript(js,null);
   }
   private void loadAlertSource(){
     if(alertWeb==null)return;
