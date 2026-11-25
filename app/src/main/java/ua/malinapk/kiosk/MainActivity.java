@@ -61,6 +61,9 @@ public class MainActivity extends Activity {
   private WebView alertWeb;
   private TextView alertCaption;
   private boolean alertEditing=false;
+  private int alertLoadedSource=-1,alertLoadedZoom=-1;
+  private boolean alertNativeMute=false;
+  private androidx.webkit.ScriptHandler alertZoomScript;
   private LinearLayout topPanel;
   private TextView gamesButton, gameTimerLabel;
   private int gameMode=-1, gameLives=3, gameIndex=0;
@@ -788,6 +791,74 @@ public class MainActivity extends Activity {
     }
     return Math.max(0,Math.min(ALERT_SOURCE_URLS.length-1,prefs.getInt("alert_source",0)));
   }
+  private int dimapZoom(){return Math.max(0,Math.min(2,getPreferences(0).getInt("dimap_zoom",2)));}
+  private static final String ALERT_MUTE_JS=
+      "(function(){\n" +
+      " if(window.__mfAudioMuted)return;window.__mfAudioMuted=true;\n" +
+      " function mute(e){if(e&&typeof e.muted==='boolean'){e.muted=true;e.defaultMuted=true;}}\n" +
+      " try{var p=HTMLMediaElement.prototype,play=p.play;p.play=function(){mute(this);return play.apply(this,arguments);};\n" +
+      " document.addEventListener('play',function(e){mute(e.target);},true);\n" +
+      " document.addEventListener('volumechange',function(e){if(e.target&&!e.target.muted)mute(e.target);},true);\n" +
+      " function scan(){document.querySelectorAll('audio,video').forEach(mute);}\n" +
+      " scan();new MutationObserver(scan).observe(document,{childList:true,subtree:true});}catch(e){}\n" +
+      " try{var original=AudioNode.prototype.connect, gains=new WeakMap();AudioNode.prototype.connect=function(dest){\n" +
+      "  if(dest&&this.context&&dest===this.context.destination){var gain=gains.get(this.context);if(!gain){gain=this.context.createGain();gain.gain.value=0;original.call(gain,dest);gains.set(this.context,gain);}var args=Array.prototype.slice.call(arguments);args[0]=gain;original.apply(this,args);return dest;}return original.apply(this,arguments);};}catch(e){}\n" +
+      "})();\n";
+  private static final String DIMAP_ZOOM_JS=
+      "(function(){\n" +
+      " if(window.__mfZoomInstalled)return;window.__mfZoomInstalled=true;\n" +
+      " var mode=MF_MODE, done=false, found=null, started=Date.now();\n" +
+      " var views=[{lat:48.5,lon:31.2,z:5},{lat:50.65,lon:28.65,z:7},{lat:50.77,lon:29.24,z:9}];\n" +
+      " var target=views[mode];if(!target)return;\n" +
+      " function isMap(m){try{return m&&typeof m.getCenter==='function'&&typeof m.getZoom==='function'&&(typeof m.jumpTo==='function'||typeof m.setView==='function');}catch(e){return false;}}\n" +
+      " function apply(m){if(done||!isMap(m))return false;found=m;try{\n" +
+      "  if(typeof m.jumpTo==='function'){if(typeof m.loaded==='function'&&!m.loaded()&&typeof m.isStyleLoaded==='function'&&!m.isStyleLoaded())return false;m.jumpTo({center:[target.lon,target.lat],zoom:target.z});}\n" +
+      "  else {if(!m._loaded)return false;m.setView([target.lat,target.lon],target.z,{animate:false});}\n" +
+      "  done=true;return true;\n" +
+      " }catch(e){return false;}}\n" +
+      " function hook(lib){try{if(!lib||!lib.Map||!lib.Map.prototype)return;var p=lib.Map.prototype;if(p.__mfZoomHook)return;\n" +
+      "  var method=typeof p.fire==='function'?'fire':null;if(!method)return;var old=p[method];\n" +
+      "  p[method]=function(){if(!done&&isMap(this)&&!found)found=this;return old.apply(this,arguments);};\n" +
+      "  Object.defineProperty(p,'__mfZoomHook',{value:true,configurable:true});\n" +
+      " }catch(e){}}\n" +
+      " function watch(name){try{var d=Object.getOwnPropertyDescriptor(window,name);if(d){hook(window[name]);return;}var value;\n" +
+      "  Object.defineProperty(window,name,{configurable:true,enumerable:true,get:function(){return value;},set:function(v){value=v;hook(v);}});\n" +
+      " }catch(e){}}\n" +
+      " ['maplibregl','mapboxgl','L'].forEach(watch);\n" +
+      " function inspect(){if(done)return;['maplibregl','mapboxgl','L'].forEach(function(k){hook(window[k]);});if(apply(found))return;\n" +
+      "  var keys=Object.getOwnPropertyNames(window);for(var i=0;i<keys.length;i++){try{var d=Object.getOwnPropertyDescriptor(window,keys[i]);if(d&&'value' in d&&isMap(d.value)&&apply(d.value))return;}catch(e){}}\n" +
+      " }\n" +
+      " var searchInput=null,searchAt=0;\n" +
+      " function searchFallback(){if(done||mode!==2||Date.now()-started<6500)return;\n" +
+      "  if(!searchInput){var inputs=document.querySelectorAll('input');for(var i=0;i<inputs.length;i++){var p=(inputs[i].placeholder||'').trim();if(/^(пошук|search)(?:\\s|…|\\.|$)/i.test(p)){searchInput=inputs[i];break;}}\n" +
+      "   if(!searchInput)return;try{searchInput.focus();var setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(searchInput,'Малин');searchInput.dispatchEvent(new Event('input',{bubbles:true}));searchAt=Date.now();}catch(e){}return;}\n" +
+      "  if(Date.now()-searchAt<500)return;\n" +
+      "  var candidates=document.querySelectorAll('[role=option],button,li,[role=button],a');for(var j=0;j<candidates.length;j++){var el=candidates[j],t=(el.textContent||'').trim();if(t.length>120||!/^Малин(?:\\s|,|$)/i.test(t)||!/Житомир|Коростен/i.test(t))continue;try{el.click();done=true;searchInput.blur();return;}catch(e){}}\n" +
+      " }\n" +
+      " var timer=setInterval(function(){inspect();if(!done)searchFallback();if(done||Date.now()-started>18000){clearInterval(timer);if(!done&&searchInput){try{var setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(searchInput,'');searchInput.dispatchEvent(new Event('input',{bubbles:true}));searchInput.blur();}catch(e){}}}},400);\n" +
+      "})();\n";
+  private String dimapZoomScript(){return DIMAP_ZOOM_JS.replace("MF_MODE",String.valueOf(dimapZoom()));}
+  private void configureAlertAudio(){
+    try{
+      if(androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.MUTE_AUDIO)){
+        androidx.webkit.WebViewCompat.setAudioMuted(alertWeb,true);alertNativeMute=true;
+      }
+    }catch(Exception ignored){}
+    if(!alertNativeMute){
+      try{if(androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT))
+        androidx.webkit.WebViewCompat.addDocumentStartJavaScript(alertWeb,ALERT_MUTE_JS,
+          new HashSet<String>(Arrays.asList("https://alerts.in.ua","https://map.ukrainealarm.com","https://dimap.live","https://www.dimap.live")));
+      }catch(Exception ignored){}
+    }
+  }
+  private void configureDimapZoom(int source){
+    try{
+      if(alertZoomScript!=null){alertZoomScript.remove();alertZoomScript=null;}
+      if(source==2&&androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT))
+        alertZoomScript=androidx.webkit.WebViewCompat.addDocumentStartJavaScript(alertWeb,dimapZoomScript(),
+          new HashSet<String>(Arrays.asList("https://dimap.live","https://www.dimap.live")));
+    }catch(Exception ignored){}
+  }
   private void cleanAlertMap(WebView view,String url){
     if(url==null)return;
     Uri uri=Uri.parse(url);String host=uri.getHost();
@@ -799,8 +870,10 @@ public class MainActivity extends Activity {
       "function clean(){var nodes=document.querySelectorAll('button,[role=button]');for(var i=0;i<nodes.length;i++){var e=nodes[i];var t=[e.getAttribute('aria-label'),e.getAttribute('title'),e.textContent].join(' ').trim();"+
       "if(/^(\\+|−|–|-)$/.test(t)||/пошук|геолокац|налаштування|підтримка|знімок|скриншот|zoom in|zoom out|search|geolocate|settings|screenshot/i.test(t)){if(!e.closest('[role=alert],.leaflet-popup,.maplibregl-popup,.mapboxgl-popup'))e.style.setProperty('display','none','important');}}}"+
       "clean();new MutationObserver(clean).observe(document.documentElement,{childList:true,subtree:true});})();";
+    if(!alertNativeMute)view.evaluateJavascript(ALERT_MUTE_JS,null);
     view.evaluateJavascript(js,null);
     if("dimap.live".equals(host)||"www.dimap.live".equals(host)){
+      view.evaluateJavascript(dimapZoomScript(),null);
       dismissDimapSupport(view);
       hideDimapControls(view);
     }
@@ -915,12 +988,16 @@ public class MainActivity extends Activity {
       "})();\n";
     view.evaluateJavascript(js,null);
   }
-  private void loadAlertSource(){
+  private void loadAlertSource(){loadAlertSource(false);}
+  private void loadAlertSource(boolean force){
     if(alertWeb==null)return;
-    int selected=alertSource();
+    int selected=alertSource(),zoom=selected==2?dimapZoom():-1;
     if(alertCaption!=null)alertCaption.setText("Карта тривог · "+ALERT_SOURCE_NAMES[selected]);
-    String url=ALERT_SOURCE_URLS[selected];
-    if(!url.equals(alertWeb.getUrl()))alertWeb.loadUrl(url);
+    if(force||selected!=alertLoadedSource||zoom!=alertLoadedZoom||alertWeb.getUrl()==null){
+      alertWeb.stopLoading();configureDimapZoom(selected);
+      alertLoadedSource=selected;alertLoadedZoom=zoom;
+      alertWeb.loadUrl(ALERT_SOURCE_URLS[selected]);
+    }
   }
   private int alertInterval(){return getPreferences(0).getInt("alert_interval",30);}
   private final Runnable alertRefresh=new Runnable(){@Override public void run(){
@@ -946,6 +1023,7 @@ public class MainActivity extends Activity {
     alertTile=new FrameLayout(this);alertTile.setClipChildren(true);
     alertWeb=new WebView(this);alertWeb.getSettings().setJavaScriptEnabled(true);
     alertWeb.getSettings().setDomStorageEnabled(true);
+    configureAlertAudio();
     alertWeb.setWebViewClient(new WebViewClient(){
       @Override public void onPageFinished(WebView view,String url){
         super.onPageFinished(view,url);cleanAlertMap(view,url);
@@ -1006,15 +1084,22 @@ public class MainActivity extends Activity {
     sources.setSelection(alertSource());box.addView(sources);
     TextView sourceHint=label("Кожне джерело має власне оформлення. Якщо карта перекрита повідомленням або погано працює у віджеті, виберіть іншу.",12,false);
     sourceHint.setTextColor(Color.DKGRAY);box.addView(sourceHint);
+    LinearLayout zoomBox=new LinearLayout(this);zoomBox.setOrientation(LinearLayout.VERTICAL);
+    TextView zoomTitle=new TextView(this);zoomTitle.setText("Початковий масштаб карти DIMAP");zoomTitle.setTextSize(16);zoomBox.addView(zoomTitle);
+    Spinner zooms=new Spinner(this);String[] zoomNames={"Уся Україна","Житомирська область","Малин та околиці"};
+    zooms.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,zoomNames));
+    zooms.setSelection(dimapZoom());zoomBox.addView(zooms);box.addView(zoomBox);
+    zoomBox.setVisibility(sources.getSelectedItemPosition()==2?View.VISIBLE:View.GONE);
+    sources.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
+      @Override public void onItemSelected(AdapterView<?> parent,View v,int position,long id){zoomBox.setVisibility(position==2?View.VISIBLE:View.GONE);}
+      @Override public void onNothingSelected(AdapterView<?> parent){zoomBox.setVisibility(View.GONE);}
+    });
     Button refreshNow=new Button(this);refreshNow.setText("Оновити мапу");box.addView(refreshNow);
     refreshNow.setOnClickListener(v->{
-      prefs.edit().putInt("alert_source",sources.getSelectedItemPosition()).apply();
+      prefs.edit().putInt("alert_source",sources.getSelectedItemPosition()).putInt("dimap_zoom",zooms.getSelectedItemPosition()).apply();
       if(alertWeb!=null){
         handler.removeCallbacks(alertRefresh);
-        alertWeb.stopLoading();
-        int index=alertSource();
-        if(alertCaption!=null)alertCaption.setText("Карта тривог · "+ALERT_SOURCE_NAMES[index]);
-        alertWeb.loadUrl(ALERT_SOURCE_URLS[index]);
+        loadAlertSource(true);
         if(alertInterval()>0&&alertTile!=null&&alertTile.getVisibility()==View.VISIBLE)handler.postDelayed(alertRefresh,Math.max(10,alertInterval())*1000L);
       }
       Toast.makeText(this,"Оновлення мапи…",Toast.LENGTH_SHORT).show();
@@ -1036,7 +1121,7 @@ public class MainActivity extends Activity {
     ScrollView scroll=new ScrollView(this);scroll.addView(box);
     new AlertDialog.Builder(this).setTitle("Налаштування карти").setView(scroll)
       .setPositiveButton("Зберегти",(d,w)->{prefs.edit().putBoolean("alert_visible",visible.isChecked()).putBoolean("alert_in_news",inNews.isChecked())
-        .putInt("alert_source",sources.getSelectedItemPosition()).putInt("alert_interval",values[intervals.getSelectedItemPosition()])
+        .putInt("alert_source",sources.getSelectedItemPosition()).putInt("dimap_zoom",zooms.getSelectedItemPosition()).putInt("alert_interval",values[intervals.getSelectedItemPosition()])
         .putString("alert_style",keys[styles.getSelectedItemPosition()]).putInt("alert_opacity",op.getProgress()+10).apply();loadAlertSource();applyAlertAppearance();})
       .setNegativeButton("Скасувати",null).show();
   }
