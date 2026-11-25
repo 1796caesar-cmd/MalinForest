@@ -1079,24 +1079,37 @@ public class MainActivity extends Activity {
     CheckBox inNews=new CheckBox(this);inNews.setText("Відображати у новині");inNews.setChecked(prefs.getBoolean("alert_in_news",true));box.addView(inNews);
     TextView sourceTitle=new TextView(this);sourceTitle.setText("Джерело карти");sourceTitle.setTextSize(16);
     sourceTitle.setPadding(0,dp(14),0,0);box.addView(sourceTitle);
-    Spinner sources=new Spinner(this);
-    sources.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,ALERT_SOURCE_NAMES));
-    sources.setSelection(alertSource());box.addView(sources);
+    final int[] sourceSelection={alertSource()};
+    RadioGroup sources=new RadioGroup(this);sources.setOrientation(RadioGroup.VERTICAL);
+    final int[] sourceIds=new int[ALERT_SOURCE_NAMES.length];
+    for(int i=0;i<ALERT_SOURCE_NAMES.length;i++){
+      RadioButton choice=new RadioButton(this);sourceIds[i]=View.generateViewId();choice.setId(sourceIds[i]);
+      choice.setText(ALERT_SOURCE_NAMES[i]);sources.addView(choice);
+    }
+    sources.check(sourceIds[sourceSelection[0]]);box.addView(sources);
     TextView sourceHint=label("Кожне джерело має власне оформлення. Якщо карта перекрита повідомленням або погано працює у віджеті, виберіть іншу.",12,false);
     sourceHint.setTextColor(Color.DKGRAY);box.addView(sourceHint);
-    LinearLayout zoomBox=new LinearLayout(this);zoomBox.setOrientation(LinearLayout.VERTICAL);
+    LinearLayout zoomBox=new LinearLayout(this);zoomBox.setOrientation(LinearLayout.VERTICAL);zoomBox.setPadding(0,dp(10),0,dp(8));
     TextView zoomTitle=new TextView(this);zoomTitle.setText("Початковий масштаб карти DIMAP");zoomTitle.setTextSize(16);zoomBox.addView(zoomTitle);
-    Spinner zooms=new Spinner(this);String[] zoomNames={"Уся Україна","Житомирська область","Малин та околиці"};
-    zooms.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,zoomNames));
-    zooms.setSelection(dimapZoom());zoomBox.addView(zooms);box.addView(zoomBox);
-    zoomBox.setVisibility(sources.getSelectedItemPosition()==2?View.VISIBLE:View.GONE);
-    sources.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
-      @Override public void onItemSelected(AdapterView<?> parent,View v,int position,long id){zoomBox.setVisibility(position==2?View.VISIBLE:View.GONE);}
-      @Override public void onNothingSelected(AdapterView<?> parent){zoomBox.setVisibility(View.GONE);}
+    final int[] zoomSelection={dimapZoom()};
+    RadioGroup zooms=new RadioGroup(this);zooms.setOrientation(RadioGroup.VERTICAL);
+    String[] zoomNames={"Уся Україна","Житомирська область","Малин та околиці"};
+    final int[] zoomIds=new int[zoomNames.length];
+    for(int i=0;i<zoomNames.length;i++){
+      RadioButton choice=new RadioButton(this);zoomIds[i]=View.generateViewId();choice.setId(zoomIds[i]);
+      choice.setText(zoomNames[i]);zooms.addView(choice);
+    }
+    zooms.check(zoomIds[zoomSelection[0]]);zoomBox.addView(zooms);
+    zooms.setOnCheckedChangeListener((group,id)->{for(int i=0;i<zoomIds.length;i++)if(id==zoomIds[i]){zoomSelection[0]=i;break;}});
+    box.addView(zoomBox);
+    zoomBox.setVisibility(sourceSelection[0]==2?View.VISIBLE:View.GONE);
+    sources.setOnCheckedChangeListener((group,id)->{
+      for(int i=0;i<sourceIds.length;i++)if(id==sourceIds[i]){sourceSelection[0]=i;break;}
+      zoomBox.setVisibility(sourceSelection[0]==2?View.VISIBLE:View.GONE);
     });
     Button refreshNow=new Button(this);refreshNow.setText("Оновити мапу");box.addView(refreshNow);
     refreshNow.setOnClickListener(v->{
-      prefs.edit().putInt("alert_source",sources.getSelectedItemPosition()).putInt("dimap_zoom",zooms.getSelectedItemPosition()).apply();
+      prefs.edit().putInt("alert_source",sourceSelection[0]).putInt("dimap_zoom",zoomSelection[0]).apply();
       if(alertWeb!=null){
         handler.removeCallbacks(alertRefresh);
         loadAlertSource(true);
@@ -1121,7 +1134,7 @@ public class MainActivity extends Activity {
     ScrollView scroll=new ScrollView(this);scroll.addView(box);
     new AlertDialog.Builder(this).setTitle("Налаштування карти").setView(scroll)
       .setPositiveButton("Зберегти",(d,w)->{prefs.edit().putBoolean("alert_visible",visible.isChecked()).putBoolean("alert_in_news",inNews.isChecked())
-        .putInt("alert_source",sources.getSelectedItemPosition()).putInt("dimap_zoom",zooms.getSelectedItemPosition()).putInt("alert_interval",values[intervals.getSelectedItemPosition()])
+        .putInt("alert_source",sourceSelection[0]).putInt("dimap_zoom",zoomSelection[0]).putInt("alert_interval",values[intervals.getSelectedItemPosition()])
         .putString("alert_style",keys[styles.getSelectedItemPosition()]).putInt("alert_opacity",op.getProgress()+10).apply();loadAlertSource();applyAlertAppearance();})
       .setNegativeButton("Скасувати",null).show();
   }
