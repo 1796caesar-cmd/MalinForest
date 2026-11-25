@@ -772,21 +772,35 @@ public class MainActivity extends Activity {
   // Незалежні вебкарти: джерело вибирає користувач, без автоматичних звукових сигналів.
   private static final String[] ALERT_SOURCE_NAMES={
     "Alerts.in.ua — спрощена (рекомендовано)",
-    "Alerts.in.ua — повна",
     "UkraineAlarm — офіційна карта",
-    "AlarmMap.online",
-    "War Monitor — карта загроз",
     "DIMAP.LIVE — карта тривог"
   };
   private static final String[] ALERT_SOURCE_URLS={
     "https://alerts.in.ua/lite",
-    "https://alerts.in.ua/",
     "https://map.ukrainealarm.com/",
-    "https://alarmmap.online/",
-    "https://map.war-monitor.org/",
     "https://dimap.live/"
   };
-  private int alertSource(){return Math.max(0,Math.min(ALERT_SOURCE_URLS.length-1,getPreferences(0).getInt("alert_source",0)));}
+  private int alertSource(){
+    android.content.SharedPreferences prefs=getPreferences(0);
+    if(!prefs.getBoolean("alert_sources_v2",false)){
+      int old=prefs.getInt("alert_source",0);
+      prefs.edit().putInt("alert_source",old==2?1:old==5?2:0).putBoolean("alert_sources_v2",true).apply();
+    }
+    return Math.max(0,Math.min(ALERT_SOURCE_URLS.length-1,prefs.getInt("alert_source",0)));
+  }
+  private void cleanAlertMap(WebView view,String url){
+    if(url==null)return;
+    Uri uri=Uri.parse(url);String host=uri.getHost();
+    if(!"https".equals(uri.getScheme()) || !("alerts.in.ua".equals(host)||"map.ukrainealarm.com".equals(host)||"dimap.live".equals(host)||"www.dimap.live".equals(host)))return;
+    String js="(function(){if(document.getElementById('mf-map-clean'))return;"+
+      "var st=document.createElement('style');st.id='mf-map-clean';"+
+      "st.textContent='header,nav,[role=navigation],.leaflet-control-zoom,.maplibregl-ctrl-zoom-in,.maplibregl-ctrl-zoom-out,.mapboxgl-ctrl-zoom-in,.mapboxgl-ctrl-zoom-out,.maplibregl-ctrl-geolocate,.mapboxgl-ctrl-geolocate,.leaflet-control-locate{display:none!important}';"+
+      "(document.head||document.documentElement).appendChild(st);"+
+      "function clean(){var nodes=document.querySelectorAll('button,[role=button]');for(var i=0;i<nodes.length;i++){var e=nodes[i];var t=[e.getAttribute('aria-label'),e.getAttribute('title'),e.textContent].join(' ').trim();"+
+      "if(/^(\\+|−|–|-)$/.test(t)||/пошук|геолокац|налаштування|підтримка|знімок|скриншот|zoom in|zoom out|search|geolocate|settings|screenshot/i.test(t)){if(!e.closest('[role=alert],.leaflet-popup,.maplibregl-popup,.mapboxgl-popup'))e.style.setProperty('display','none','important');}}}"+
+      "clean();new MutationObserver(clean).observe(document.documentElement,{childList:true,subtree:true});})();";
+    view.evaluateJavascript(js,null);
+  }
   private void loadAlertSource(){
     if(alertWeb==null)return;
     int selected=alertSource();
@@ -818,7 +832,11 @@ public class MainActivity extends Activity {
     alertTile=new FrameLayout(this);alertTile.setClipChildren(true);
     alertWeb=new WebView(this);alertWeb.getSettings().setJavaScriptEnabled(true);
     alertWeb.getSettings().setDomStorageEnabled(true);
-    alertWeb.setWebViewClient(new WebViewClient());
+    alertWeb.setWebViewClient(new WebViewClient(){
+      @Override public void onPageFinished(WebView view,String url){
+        super.onPageFinished(view,url);cleanAlertMap(view,url);
+      }
+    });
     alertTile.addView(alertWeb,new FrameLayout.LayoutParams(-1,-1));
     alertCaption=label("Карта повітряних тривог",11,true);
     alertCaption.setGravity(Gravity.CENTER);alertCaption.setBackgroundColor(0xB9000000);
@@ -860,7 +878,7 @@ public class MainActivity extends Activity {
     if(screenNewsShowing)handler.post(()->updateNewsTextFlow());
     // WebView відображає сайт із власним фоном: прозорість підкладки не робить сайт прозорим.
     handler.removeCallbacks(alertRefresh);
-    if(show&&!silenceActive&&!siteOpen&&!birthdayShowing&&gameOverlay==null)handler.post(alertRefresh);
+    if(show&&!silenceActive&&!siteOpen&&!birthdayShowing&&gameOverlay==null)handler.postDelayed(alertRefresh,Math.max(10,alertInterval())*1000L);
   }
   private void alertSettings(){
     android.content.SharedPreferences prefs=getPreferences(0);
@@ -874,6 +892,19 @@ public class MainActivity extends Activity {
     sources.setSelection(alertSource());box.addView(sources);
     TextView sourceHint=label("Кожне джерело має власне оформлення. Якщо карта перекрита повідомленням або погано працює у віджеті, виберіть іншу.",12,false);
     sourceHint.setTextColor(Color.DKGRAY);box.addView(sourceHint);
+    Button refreshNow=new Button(this);refreshNow.setText("Оновити мапу");box.addView(refreshNow);
+    refreshNow.setOnClickListener(v->{
+      prefs.edit().putInt("alert_source",sources.getSelectedItemPosition()).apply();
+      if(alertWeb!=null){
+        handler.removeCallbacks(alertRefresh);
+        alertWeb.stopLoading();
+        int index=alertSource();
+        if(alertCaption!=null)alertCaption.setText("Карта тривог · "+ALERT_SOURCE_NAMES[index]);
+        alertWeb.loadUrl(ALERT_SOURCE_URLS[index]);
+        if(alertTile!=null&&alertTile.getVisibility()==View.VISIBLE)handler.postDelayed(alertRefresh,Math.max(10,alertInterval())*1000L);
+      }
+      Toast.makeText(this,"Оновлення мапи…",Toast.LENGTH_SHORT).show();
+    });
     TextView refreshTitle=new TextView(this);refreshTitle.setText("Інтервал оновлення карти");refreshTitle.setTextSize(16);box.addView(refreshTitle);
     Spinner intervals=new Spinner(this);String[] choices={"10 секунд","15 секунд","30 секунд","1 хвилина","2 хвилини","5 хвилин"};int[] values={10,15,30,60,120,300};
     intervals.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,choices));
