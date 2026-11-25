@@ -811,31 +811,44 @@ public class MainActivity extends Activity {
       "(function(){\n" +
       "  if(window.__mfDimapControls)return;\n" +
       "  window.__mfDimapControls=true;\n" +
-      "  var protectedArea='[role=\"alert\"],[role=\"alertdialog\"],[role=\"dialog\"],dialog,.leaflet-popup,.maplibregl-popup,.mapboxgl-popup';\n" +
+      "  var protectedArea='[role=\"alert\"],[role=\"alertdialog\"],[role=\"dialog\"],dialog,.leaflet-popup,.maplibregl-popup,.mapboxgl-popup,.leaflet-marker-icon,.maplibregl-marker,.mapboxgl-marker';\n" +
       "  var named=/(?:^|\\s)(?:zoom\\s*(?:in|out|plus|minus)|zoom[+-]|(?:map\\s*)?geolocat(?:e|ion)|(?:map\\s*)?locate(?:\\s*(?:me|user))?|(?:map\\s*)?center(?:ing)?|(?:map\\s*)?centre|(?:map\\s*)?recenter|(?:map\\s*)?gps|screenshot|screen\\s*shot|(?:map\\s*)?camera|(?:take\\s*)?photo|capture\\s*(?:map|screen)|chevron\\s*down|(?:header|toolbar|menu)\\s*(?:toggle|collapse|expand)|наблизити|віддалити|збільшити\\s*масштаб|зменшити\\s*масштаб|центрувати|геолокація|моє\\s*місце|моя\\s*локація|знімок\\s*карти|скриншот|скріншот|фотоапарат|згорнути\\s*(?:меню|панель)|розгорнути\\s*(?:меню|панель))(?:\\s|$)/i;\n" +
+      "  var additional=/(?:^|\\s)(?:tv(?:\\s*(?:mode|button|btn|toggle|icon))?|television|fullscreen|full\\s*screen|(?:enter|exit)\\s*full\\s*screen|maximize(?:\\s*2)?|minimize(?:\\s*2)?|expand|crosshair|locate\\s*fixed|target\\s*icon|my\\s*location|my\\s*city|center\\s*map|map\\s*center|news(?:\\s*(?:feed|button|btn|toggle|icon))?|newspaper|feed\\s*(?:button|btn|toggle|icon)|notification\\s*feed|режим\\s*телевізора|повний\\s*екран|на\\s*весь\\s*екран|моє\\s*місто|стрічка\\s*(?:новин|повідомлень)|показати\\s*стрічку|новини|центрувати)(?:\\s|$)/i;\n" +
       "  function normalize(s){return (s||'').replace(/([a-z])([A-Z])/g,'$1 $2').replace(/[_-]+/g,' ').trim();}\n" +
       "  function clean(){\n" +
-      "    var buttons=document.querySelectorAll('button,[role=\"button\"]');\n" +
+      "    var buttons=document.querySelectorAll('button,[role=\"button\"],a[title],a[aria-label],[tabindex][title],[tabindex][aria-label],[title][onclick],[aria-label][onclick]');\n" +
       "    for(var i=0;i<buttons.length;i++){\n" +
       "      var b=buttons[i];\n" +
       "      if(b.closest(protectedArea)||b.hasAttribute('data-mf-dimap-control'))continue;\n" +
       "      var r=b.getBoundingClientRect();\n" +
-      "      if(r.width<14||r.height<14||r.width>120||r.height>100||r.right<window.innerWidth*0.55)continue;\n" +
+      "      if(r.width<14||r.height<14||r.width>120||r.height>100)continue;\n" +
+      "      var right=r.right>=window.innerWidth*0.78, left=r.left<=window.innerWidth*0.16;\n" +
       "      var text=(b.textContent||'').trim();\n" +
       "      var svg=b.querySelector('svg');\n" +
       "      var attrs=[b.id,b.getAttribute('class'),b.getAttribute('aria-label'),b.getAttribute('title'),b.getAttribute('data-tooltip'),svg&&svg.getAttribute('class'),svg&&svg.getAttribute('data-icon'),svg&&svg.getAttribute('aria-label')];\n" +
       "      if(svg){var use=svg.querySelector('use');if(use)attrs.push(use.getAttribute('href')||use.getAttribute('xlink:href'));}\n" +
       "      var meta=attrs.map(normalize).join(' ');\n" +
-      "      var hide=/^[+＋−–—-]$/.test(text)||named.test(meta)||named.test(text);\n" +
+      "      var hide=(right||left)&&(named.test(meta)||named.test(text)||additional.test(meta)||additional.test(text)||(right&&/^[+＋−–—-]$/.test(text)));\n" +
+
       "      // SVG-only toolbar controls sometimes have no accessible name.\n" +
-      "      if(!hide&&svg&&!text&&r.width<=85&&r.height<=85){\n" +
+      "      if(!hide&&svg&&(right||left)&&(!text||/^\\d{1,3}$/.test(text)||/^TV$/i.test(text))&&r.width<=85&&r.height<=85){\n" +
       "        var circles=svg.querySelectorAll('circle'), lines=svg.querySelectorAll('line'), poly=svg.querySelectorAll('polyline');\n" +
       "        var paths=Array.from(svg.querySelectorAll('path')).map(function(p){return (p.getAttribute('d')||'').replace(/,/g,' ').replace(/\\s+/g,' ').trim();});\n" +
       "        var plusMinus=paths.length>0&&paths.length<=2&&paths.every(function(d){return /^M\\s*[-\\d.]+\\s*[-\\d.]+\\s*[hHvV]\\s*[-\\d.]+\\s*$/i.test(d);});\n" +
       "        var crosshair=circles.length>0&&(lines.length>=2||paths.length>=2)&&r.top<window.innerHeight*0.8;\n" +
       "        var camera=circles.length===1&&svg.querySelector('rect,path')&&r.top<window.innerHeight*0.18;\n" +
       "        var chevron=r.top<window.innerHeight*0.18&&poly.length===1&&poly[0].getAttribute('points')&&/^\\s*6[, ]+9\\s+12[, ]+15\\s+18[, ]+9\\s*$/.test(poly[0].getAttribute('points'));\n" +
-      "        hide=plusMinus||crosshair||camera||chevron;\n" +
+      "        var rects=svg.querySelectorAll('rect'), svgText=(svg.textContent||'').trim();\n" +
+      "        var pathText=paths.join(' ').toLowerCase();\n" +
+      "        var tv=/^TV$/i.test(text)||/^TV$/i.test(svgText)||(/\\btv\\b/i.test(meta));\n" +
+      "        // Common fullscreen corner paths (Lucide/Feather/Material); only right toolbar.\n" +
+      "        var fullscreen=paths.length>=4&&paths.length<=8&&paths.filter(function(d){return /[hHlL]/.test(d)&&/[vVlL]/.test(d);}).length>=4;\n" +
+      "        var target=circles.length>=2||(circles.length>=1&&paths.length+lines.length>=3);\n" +
+      "        // Newspaper/feed icon: a bordered panel with multiple short lines or a known icon name.\n" +
+      "        var feed=(rects.length>=1&&paths.length+lines.length>=2)||(/newspaper|news feed|feed toggle/i.test(meta));\n" +
+      "        // Some icon buttons contain a badge, but do not hide it separately or touch map overlays.\n" +
+      "        hide=(right&&(plusMinus||crosshair||camera||chevron||tv||fullscreen||target))||(left&&feed);\n" +
+
       "      }\n" +
       "      if(hide){b.setAttribute('data-mf-dimap-control','1');b.style.setProperty('display','none','important');}\n" +
       "    }\n" +
@@ -911,7 +924,7 @@ public class MainActivity extends Activity {
   }
   private int alertInterval(){return getPreferences(0).getInt("alert_interval",30);}
   private final Runnable alertRefresh=new Runnable(){@Override public void run(){
-    if(alertWeb!=null && alertTile!=null && alertTile.getVisibility()==View.VISIBLE){
+    if(alertInterval()>0 && alertWeb!=null && alertTile!=null && alertTile.getVisibility()==View.VISIBLE){
       alertWeb.reload();handler.postDelayed(this,Math.max(10,alertInterval())*1000L);
     }
   }};
@@ -979,7 +992,7 @@ public class MainActivity extends Activity {
     if(screenNewsShowing)handler.post(()->updateNewsTextFlow());
     // WebView відображає сайт із власним фоном: прозорість підкладки не робить сайт прозорим.
     handler.removeCallbacks(alertRefresh);
-    if(show&&!silenceActive&&!siteOpen&&!birthdayShowing&&gameOverlay==null)handler.postDelayed(alertRefresh,Math.max(10,alertInterval())*1000L);
+    if(alertInterval()>0&&show&&!silenceActive&&!siteOpen&&!birthdayShowing&&gameOverlay==null)handler.postDelayed(alertRefresh,Math.max(10,alertInterval())*1000L);
   }
   private void alertSettings(){
     android.content.SharedPreferences prefs=getPreferences(0);
@@ -1002,14 +1015,16 @@ public class MainActivity extends Activity {
         int index=alertSource();
         if(alertCaption!=null)alertCaption.setText("Карта тривог · "+ALERT_SOURCE_NAMES[index]);
         alertWeb.loadUrl(ALERT_SOURCE_URLS[index]);
-        if(alertTile!=null&&alertTile.getVisibility()==View.VISIBLE)handler.postDelayed(alertRefresh,Math.max(10,alertInterval())*1000L);
+        if(alertInterval()>0&&alertTile!=null&&alertTile.getVisibility()==View.VISIBLE)handler.postDelayed(alertRefresh,Math.max(10,alertInterval())*1000L);
       }
       Toast.makeText(this,"Оновлення мапи…",Toast.LENGTH_SHORT).show();
     });
-    TextView refreshTitle=new TextView(this);refreshTitle.setText("Інтервал оновлення карти");refreshTitle.setTextSize(16);box.addView(refreshTitle);
-    Spinner intervals=new Spinner(this);String[] choices={"10 секунд","15 секунд","30 секунд","1 хвилина","2 хвилини","5 хвилин"};int[] values={10,15,30,60,120,300};
+    TextView refreshTitle=new TextView(this);refreshTitle.setText("Примусове перезавантаження карти");refreshTitle.setTextSize(16);box.addView(refreshTitle);
+    Spinner intervals=new Spinner(this);String[] choices={"Без примусового перезавантаження","10 секунд","15 секунд","30 секунд","1 хвилина","2 хвилини","5 хвилин"};int[] values={0,10,15,30,60,120,300};
     intervals.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,choices));
     for(int i=0;i<values.length;i++)if(values[i]==alertInterval())intervals.setSelection(i);box.addView(intervals);
+    TextView intervalHint=label("Без перезавантаження карта оновлює дані власними засобами. Перевіряйте стан з’єднання; за потреби натисніть «Оновити мапу».",12,false);
+    intervalHint.setTextColor(Color.DKGRAY);box.addView(intervalHint);
     TextView appearance=new TextView(this);appearance.setText("Оформлення карти");appearance.setTextSize(16);appearance.setPadding(0,dp(12),0,0);box.addView(appearance);
     Spinner styles=new Spinner(this);String[] st={"Без рамки та фону","Напівпрозора плитка","Тонка рамка"};String[] keys={"none","tile","border"};
     styles.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,st));
