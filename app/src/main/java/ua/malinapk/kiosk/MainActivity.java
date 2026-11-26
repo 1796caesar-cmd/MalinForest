@@ -155,7 +155,7 @@ public class MainActivity extends Activity {
   private String currentCategory="";
   private final ArrayList<String> activeCategories=new ArrayList<>();
   private boolean tickerRunning=false;
-  private static class Person {String name,position,department;int day,month,year;Person(String n,String pos,String dep,int d,int m,int y){name=n;position=pos;department=dep;day=d;month=m;year=y;}}
+  private static class Person {String name,surname,position,department;int day,month,year;Person(String n,String sn,String pos,String dep,int d,int m,int y){name=n;surname=sn;position=pos;department=dep;day=d;month=m;year=y;}}
   private boolean isManagement(Person p){return p.department!=null&&p.department.trim().replaceAll("\\s+"," ").equalsIgnoreCase("Апарату управління");}
   private String birthdayDetail(Person p){String pos=p.position==null?"":p.position.trim(),dep=p.department==null?"":p.department.trim();return pos.isEmpty()?dep:(dep.isEmpty()?pos:pos+" • "+dep);}
   private String birthdayEntry(Person p,boolean monthly){String first=(monthly?String.format(new Locale("uk","UA"),"%02d.%02d ● ",p.day,p.month):"")+p.name;String detail=birthdayDetail(p);return detail.isEmpty()?first:first+"\n"+detail;}
@@ -2656,7 +2656,7 @@ public class MainActivity extends Activity {
     try{Uri f=dataFile("Іменинники.xlsx");if(f==null)f=dataFile("MalinForest_Іменинники.xlsx");if(f!=null){LinkedHashMap<String,ArrayList<String[]>> wb=readWorkbook(f);
       for(String[] row:wb.values().iterator().next()){
         String name=(row[0]+" "+row[1]+" "+row[2]).trim();if(name.isEmpty()||row[0].equalsIgnoreCase("Прізвище"))continue;
-        int[] d=parseBirthday(row[5]);if(d!=null)newPeople.add(new Person(name,row[3],row[4],d[0],d[1],d[2]));
+        int[] d=parseBirthday(row[5]);if(d!=null)newPeople.add(new Person(name,row[0],row[3],row[4],d[0],d[1],d[2]));
       }}else errors+="Немає Іменинники.xlsx. ";}catch(Exception ex){errors+="Помилка Іменинники.xlsx: "+ex.getMessage();}
     String finalErrors=errors;runOnUiThread(()->{facts.clear();facts.putAll(newFacts);people.clear();people.addAll(newPeople);
       factOrders.clear();
@@ -2804,6 +2804,59 @@ public class MainActivity extends Activity {
       birthdayMusic.setVolume(volume,volume);birthdayMusic.prepare();birthdayMusic.start();
     }catch(Exception ex){stopBirthdayMusic();}
   }
+  // Photo/<Прізвище>.png: необов'язковий портрет лише для ювілейної листівки.
+  private String photoKey(String value){
+    return java.text.Normalizer.normalize(value==null?"":value.trim(),java.text.Normalizer.Form.NFC).toLowerCase(new Locale("uk","UA"));
+  }
+  private Uri jubileePhotoUri(Person person){
+    if(dataFolder==null)return null;
+    String surname=photoKey(person.surname);
+    if(surname.isEmpty())return null;
+    // Не показуємо чужий портрет, якщо в Excel є різні люди з однаковим прізвищем.
+    for(Person other:people){
+      if(other!=person&&surname.equals(photoKey(other.surname))&&!photoKey(person.name).equals(photoKey(other.name)))return null;
+    }
+    try{
+      Uri parent=gameFile("Photo");
+      if(parent==null)return null;
+      Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(dataFolder,DocumentsContract.getDocumentId(parent));
+      String expected=surname+".png";
+      try(Cursor c=getContentResolver().query(children,new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME,DocumentsContract.Document.COLUMN_MIME_TYPE},null,null,null)){
+        if(c!=null)while(c.moveToNext()){
+          if(expected.equals(photoKey(c.getString(1)))&&!DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2)))
+            return DocumentsContract.buildDocumentUriUsingTree(dataFolder,c.getString(0));
+        }
+      }
+    }catch(Exception ignored){}
+    return null;
+  }
+  private Bitmap loadJubileePhoto(Person person){
+    Uri uri=jubileePhotoUri(person);
+    if(uri==null)return null;
+    try{
+      BitmapFactory.Options options=new BitmapFactory.Options();options.inJustDecodeBounds=true;
+      try(InputStream in=getContentResolver().openInputStream(uri)){if(in==null)return null;BitmapFactory.decodeStream(in,null,options);}
+      if(options.outWidth<=0||options.outHeight<=0)return null;
+      options.inSampleSize=1;
+      while(Math.max(options.outWidth,options.outHeight)/(long)options.inSampleSize>1800)options.inSampleSize*=2;
+      options.inJustDecodeBounds=false;options.inPreferredConfig=Bitmap.Config.ARGB_8888;
+      try(InputStream in=getContentResolver().openInputStream(uri)){return in==null?null:BitmapFactory.decodeStream(in,null,options);}
+    }catch(Exception ignored){return null;}
+  }
+  private void addJubileePhoto(FrameLayout target,Person person,float scale,float left,float top){
+    Bitmap bitmap=loadJubileePhoto(person);
+    if(bitmap==null||scale<=0)return;
+    // Прив'язка до оригіналу 1536x1024: нижній лівий кут; не змінюємо шаблон або координати тексту.
+    float boxWidth=620f,boxHeight=685f;
+    float aspect=bitmap.getWidth()/(float)bitmap.getHeight();
+    float width=Math.min(boxWidth,boxHeight*aspect);
+    ImageView photo=new ImageView(this);photo.setImageBitmap(bitmap);
+    photo.setScaleType(ImageView.ScaleType.CENTER_CROP);
+    photo.setBackground(null);photo.setContentDescription(null);
+    FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(Math.max(1,Math.round(width*scale)),Math.max(1,Math.round(boxHeight*scale)),Gravity.TOP|Gravity.LEFT);
+    pp.leftMargin=Math.round(left);pp.topMargin=Math.round(top+(1024f-boxHeight)*scale);
+    target.addView(photo,pp);
+  }
   private void showNextBirthday(){if(siteOpen){stopBirthdayMusic();birthdayShowing=false;applyAlertAppearance();if(birthdayOverlay!=null){root.removeView(birthdayOverlay);birthdayOverlay=null;}updateSeasonVisibility();return;}if(birthdayQueueIndex>=birthdayQueue.size()){
       if(birthdayOverlay!=null){root.removeView(birthdayOverlay);birthdayOverlay=null;}
       stopBirthdayMusic();birthdayShowing=false;applyAlertAppearance();updateSeasonVisibility();if(!siteOpen&&video!=null&&!playlist.isEmpty())video.start();return;}
@@ -2830,6 +2883,7 @@ public class MainActivity extends Activity {
        int w=target.getWidth(),h=target.getHeight();
        float scale=Math.min(w/1536f,h/1024f);
        float left=(w-1536f*scale)/2f,top=(h-1024f*scale)/2f;
+       if(jubilee&&img!=null)addJubileePhoto(target,p,scale,left,top);
        // Звичайна листівка: світле поле приблизно x=575..1460, y=390..705.
        // Ювілейна: x=390..1450, y=520..810.
        int x=jubilee?490:630, y=jubilee?(currentBirthdayDeferred?520:535):470, bw=jubilee?860:770, bh=jubilee?(currentBirthdayDeferred?130:148):130;
