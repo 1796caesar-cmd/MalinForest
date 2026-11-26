@@ -2832,11 +2832,14 @@ public class MainActivity extends Activity {
        float left=(w-1536f*scale)/2f,top=(h-1024f*scale)/2f;
        // Звичайна листівка: світле поле приблизно x=575..1460, y=390..705.
        // Ювілейна: x=390..1450, y=520..810.
-       int x=jubilee?490:630, y=jubilee?555:470, bw=jubilee?860:770, bh=jubilee?112:130;
+       int x=jubilee?490:630, y=jubilee?(currentBirthdayDeferred?520:535):470, bw=jubilee?860:770, bh=jubilee?(currentBirthdayDeferred?130:148):130;
        TextView name=label(p.name,28,true);
-       name.setBackgroundColor(Color.TRANSPARENT);
+       name.setBackground(null);
+       name.setForeground(null);
+       if(jubilee)name.setIncludeFontPadding(false);
        name.setTextColor(0xFF51331B);name.setGravity(Gravity.CENTER);name.setMaxLines(2);
        float base=p.name.length()>35?43:p.name.length()>25?52:62;
+       if(jubilee)base=Math.min(base,currentBirthdayDeferred?52:58);
        name.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,base*scale);
        FrameLayout.LayoutParams np=new FrameLayout.LayoutParams(Math.round(bw*scale),Math.round(bh*scale));
        np.leftMargin=Math.round(left+x*scale);np.topMargin=Math.round(top+y*scale);
@@ -2844,21 +2847,24 @@ public class MainActivity extends Activity {
        if(currentBirthdayDeferred){
          String[] months={"січня","лютого","березня","квітня","травня","червня","липня","серпня","вересня","жовтня","листопада","грудня"};
          TextView actualDate=label("День народження — "+p.day+" "+months[p.month-1],20,true);
-         actualDate.setBackgroundColor(Color.TRANSPARENT);actualDate.setTextColor(0xFF755020);
+         actualDate.setBackground(null);actualDate.setForeground(null);actualDate.setTextColor(0xFF755020);
          actualDate.setGravity(Gravity.CENTER);
          actualDate.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,37*scale);
-         FrameLayout.LayoutParams dpDate=new FrameLayout.LayoutParams(Math.round(850*scale),Math.round(68*scale));
+         FrameLayout.LayoutParams dpDate=new FrameLayout.LayoutParams(Math.round(850*scale),Math.round((jubilee?48:68)*scale));
          dpDate.leftMargin=Math.round(left+(jubilee?495:600)*scale);
-         dpDate.topMargin=Math.round(top+(jubilee?625:590)*scale);
+         dpDate.topMargin=Math.round(top+(jubilee?655:590)*scale);
          target.addView(actualDate,dpDate);
        }
        if(jubilee){
          TextView ageView=label(age+" років",28,true);
-         ageView.setBackgroundColor(Color.TRANSPARENT);
+         // Вік — тільки текст на оригінальній листівці, без підкладки.
+         ageView.setBackground(null);
+         ageView.setForeground(null);
+         ageView.setIncludeFontPadding(false);
          ageView.setTextColor(0xFF755020);ageView.setGravity(Gravity.CENTER);
          ageView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,55*scale);
          FrameLayout.LayoutParams ap=new FrameLayout.LayoutParams(Math.round(700*scale),Math.round(85*scale));
-         ap.leftMargin=Math.round(left+570*scale);ap.topMargin=Math.round(top+685*scale);
+         ap.leftMargin=Math.round(left+570*scale);ap.topMargin=Math.round(top+(currentBirthdayDeferred?705:685)*scale);
          target.addView(ageView,ap);
        }
      });
