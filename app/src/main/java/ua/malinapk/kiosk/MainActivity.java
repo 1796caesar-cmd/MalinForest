@@ -620,8 +620,8 @@ public class MainActivity extends Activity {
     i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
     startActivityForResult(i,PICK_DATA);}
   private void displaySettings(){
-    String[] labels={"Кнопка інтерактивних ігор","Іменинники", "Свята", "Онлайн-новини", "Факти з Excel"};
-    String[] keys={"games","birthdays","holidays","news","facts"};
+    String[] labels={"Кнопка інтерактивних ігор","Іменинники", "Фото на ювілеях", "Свята", "Онлайн-новини", "Факти з Excel"};
+    String[] keys={"games","birthdays","jubilee_photos","holidays","news","facts"};
     boolean[] values=new boolean[keys.length];for(int i=0;i<keys.length;i++)values[i]=enabled(keys[i]);
     new AlertDialog.Builder(this).setTitle("Відображення елементів")
       .setMultiChoiceItems(labels,values,(d,i,checked)->{getPreferences(0).edit().putBoolean(keys[i],checked).apply();updateVisibility();})
@@ -1367,19 +1367,19 @@ public class MainActivity extends Activity {
   }
   private void elementsSettings(){
     String[] names={"Кнопка інтерактивних ігор","Налаштування карти","Іменинники",
-      "Свята","Онлайн-новини","Факти з Excel","Сезонні ефекти","Новини між відео","Швидкість стрічки"};
-    String[] keys={"games",null,"birthdays","holidays","news","facts",null,null,null};
+      "Фото на ювілеях","Свята","Онлайн-новини","Факти з Excel","Сезонні ефекти","Новини між відео","Швидкість стрічки"};
+    String[] keys={"games",null,"birthdays","jubilee_photos","holidays","news","facts",null,null,null};
     String[] opts=new String[names.length];
     for(int i=0;i<names.length;i++){
-      if(i==1||i==6||i==7||i==8){opts[i]=names[i]+"  ›";continue;}
+      if(keys[i]==null){opts[i]=names[i]+"  ›";continue;}
       opts[i]=(enabled(keys[i])?"☑  ":"☐  ")+names[i];
     }
     new AlertDialog.Builder(this).setTitle("Відображення елементів")
       .setItems(opts,(d,w)->{
         if(w==1){alertSettings();return;}
-        if(w==6){seasonSettings();return;}
-        if(w==7){screenNewsSettings();return;}
-        if(w==8){tickerSpeedSettings();return;}
+        if(w==7){seasonSettings();return;}
+        if(w==8){screenNewsSettings();return;}
+        if(w==9){tickerSpeedSettings();return;}
         getPreferences(0).edit().putBoolean(keys[w],!enabled(keys[w])).apply();
         updateVisibility();elementsSettings();
       }).setNegativeButton("Назад",(d,w)->settings()).show();
@@ -2883,7 +2883,7 @@ public class MainActivity extends Activity {
        int w=target.getWidth(),h=target.getHeight();
        float scale=Math.min(w/1536f,h/1024f);
        float left=(w-1536f*scale)/2f,top=(h-1024f*scale)/2f;
-       if(jubilee&&img!=null)addJubileePhoto(target,p,scale,left,top);
+       if(jubilee&&img!=null&&enabled("jubilee_photos"))addJubileePhoto(target,p,scale,left,top);
        // Звичайна листівка: світле поле приблизно x=575..1460, y=390..705.
        // Ювілейна: x=390..1450, y=520..810.
        int x=jubilee?490:630, y=jubilee?(currentBirthdayDeferred?520:535):470, bw=jubilee?860:770, bh=jubilee?(currentBirthdayDeferred?130:148):130;
