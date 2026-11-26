@@ -2703,7 +2703,7 @@ public class MainActivity extends Activity {
       list.removeAllViews();HashSet<String> disabled=disabledBirthdayTimes();
       for(String time:parseTimes(birthdayTimes())){
         LinearLayout row=new LinearLayout(MainActivity.this);row.setGravity(Gravity.CENTER_VERTICAL);
-        TextView clock=label(time,29,true);clock.setPadding(dp(8),dp(10),dp(8),dp(10));
+        TextView clock=label(time,29,true);clock.setTextColor(Color.BLACK);clock.setPadding(dp(8),dp(10),dp(8),dp(10));
         row.addView(clock,new LinearLayout.LayoutParams(0,dp(70),1));
         clock.setOnClickListener(v->birthdayTimePicker(time,()->{dialog.dismiss();birthdaySettings();}));
         Switch toggle=new Switch(MainActivity.this);toggle.setChecked(!disabled.contains(time));
